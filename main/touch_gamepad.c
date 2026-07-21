@@ -11,6 +11,7 @@
 
 #define TOUCH_GAMEPAD_NVS_NAMESPACE "touchgp"
 #define TOUCH_GAMEPAD_NVS_KEY "config"
+#define TOUCH_GAMEPAD_CONFIG_VERSION 1U
 #define TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT 32
 #define TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM 24
 #define TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT_SQUARED (TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT * TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT)
@@ -169,7 +170,7 @@ static void touch_gamepad_copy_runtime_to_persisted(const touch_gamepad_config_t
                                                     touch_gamepad_persisted_config_t *persisted)
 {
     memset(persisted, 0, sizeof(*persisted));
-    persisted->version = 1U;
+    persisted->version = TOUCH_GAMEPAD_CONFIG_VERSION;
     persisted->transport_mode = config->transport_mode;
     persisted->theme = config->theme;
     memcpy(persisted->tap_buttons, config->tap_buttons, sizeof(config->tap_buttons));
@@ -286,7 +287,7 @@ esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config)
     err = nvs_get_blob(handle, TOUCH_GAMEPAD_NVS_KEY, &persisted, &required_size);
     nvs_close(handle);
 
-    if ((err != ESP_OK) || (required_size != sizeof(persisted)) || (persisted.version != 1U)) {
+    if ((err != ESP_OK) || (required_size != sizeof(persisted)) || (persisted.version != TOUCH_GAMEPAD_CONFIG_VERSION)) {
         ESP_LOGW(TAG,
                  "Stored config invalid (err=%s size=%u version=%u), using defaults",
                  esp_err_to_name(err),
@@ -347,7 +348,7 @@ bool touch_gamepad_detect_gesture(touch_gamepad_gesture_state_t *state,
         };
 
         if (corner == expected_corners[state->expected_corner_index]) {
-            state->expected_corner_index++;
+            state->expected_corner_index += 1U;
             if (state->expected_corner_index == TOUCH_GAMEPAD_CORNER_COUNT) {
                 state->expected_corner_index = 0U;
                 event->type = TOUCH_GAMEPAD_GESTURE_OPEN_MENU;
