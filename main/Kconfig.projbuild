@@ -1,0 +1,53 @@
+menu "Touch Gamepad"
+
+choice TOUCH_GAMEPAD_BOARD
+    prompt "Board preset"
+    default TOUCH_GAMEPAD_BOARD_GUITION
+    help
+        Select the target device preset.
+
+    config TOUCH_GAMEPAD_BOARD_GUITION
+        bool "Guition ESP32-S3-4848S040"
+
+    config TOUCH_GAMEPAD_BOARD_WAVESHARE
+        bool "Waveshare ESP32-S3-Touch-LCD-4"
+endchoice
+
+config TOUCH_GAMEPAD_SCREEN_WIDTH
+    int "Display width"
+    default 480
+
+config TOUCH_GAMEPAD_SCREEN_HEIGHT
+    int "Display height"
+    default 480
+
+config TOUCH_GAMEPAD_CORNER_MARGIN
+    int "Corner tap margin"
+    default 96
+    help
+        Tap distance in pixels from a screen edge that qualifies as a corner tap.
+
+choice TOUCH_GAMEPAD_DEFAULT_TRANSPORT
+    prompt "Default transport"
+    default TOUCH_GAMEPAD_DEFAULT_TRANSPORT_BLE if TOUCH_GAMEPAD_BOARD_GUITION
+    default TOUCH_GAMEPAD_DEFAULT_TRANSPORT_USB if TOUCH_GAMEPAD_BOARD_WAVESHARE
+
+    config TOUCH_GAMEPAD_DEFAULT_TRANSPORT_BLE
+        bool "BLE"
+
+    config TOUCH_GAMEPAD_DEFAULT_TRANSPORT_USB
+        bool "USB"
+endchoice
+
+choice TOUCH_GAMEPAD_DEFAULT_THEME
+    prompt "Default theme"
+    default TOUCH_GAMEPAD_DEFAULT_THEME_BLUE
+
+    config TOUCH_GAMEPAD_DEFAULT_THEME_BLUE
+        bool "Blue on black"
+
+    config TOUCH_GAMEPAD_DEFAULT_THEME_GREEN
+        bool "Green on black"
+endchoice
+
+endmenu
