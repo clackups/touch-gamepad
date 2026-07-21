@@ -234,7 +234,7 @@ void touch_gamepad_config_set_defaults(touch_gamepad_config_t *config)
 esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config)
 {
     touch_gamepad_persisted_config_t persisted = { 0 };
-    nvs_handle_t handle = 0;
+    nvs_handle_t handle;
     size_t required_size = sizeof(persisted);
     esp_err_t err = nvs_open(TOUCH_GAMEPAD_NVS_NAMESPACE, NVS_READONLY, &handle);
 
@@ -268,11 +268,10 @@ esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config)
 esp_err_t touch_gamepad_config_save(const touch_gamepad_config_t *config)
 {
     touch_gamepad_persisted_config_t persisted;
-    nvs_handle_t handle = 0;
-    esp_err_t err;
+    nvs_handle_t handle;
 
     touch_gamepad_copy_runtime_to_persisted(config, &persisted);
-    err = nvs_open(TOUCH_GAMEPAD_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    esp_err_t err = nvs_open(TOUCH_GAMEPAD_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         return err;
     }
