@@ -177,6 +177,41 @@ static void touch_gamepad_copy_runtime_to_persisted(const touch_gamepad_config_t
     persisted->two_finger_slide = config->two_finger_slide;
 }
 
+static void touch_gamepad_sanitize_config(touch_gamepad_config_t *config)
+{
+    const touch_gamepad_board_preset_t *preset = touch_gamepad_get_board_preset();
+    size_t index;
+
+    if (config->transport_mode > TOUCH_GAMEPAD_TRANSPORT_USB) {
+        ESP_LOGW(TAG, "Invalid stored transport mode %d, restoring default", (int)config->transport_mode);
+        config->transport_mode = preset->default_transport;
+    }
+
+    if ((!preset->supports_usb) && (config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_USB)) {
+        ESP_LOGW(TAG, "Stored USB mode is not supported on %s, forcing BLE", preset->board_name);
+        config->transport_mode = TOUCH_GAMEPAD_TRANSPORT_BLE;
+    }
+
+    if (config->theme > TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK) {
+        ESP_LOGW(TAG, "Invalid stored theme %d, restoring default", (int)config->theme);
+#if CONFIG_TOUCH_GAMEPAD_DEFAULT_THEME_GREEN
+        config->theme = TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK;
+#else
+        config->theme = TOUCH_GAMEPAD_THEME_BLUE_ON_BLACK;
+#endif
+    }
+
+    for (index = 0; index < TOUCH_GAMEPAD_TAP_BINDING_COUNT; ++index) {
+        if (config->tap_buttons[index] >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
+            ESP_LOGW(TAG,
+                     "Invalid stored button index %u for tap binding %u, restoring default",
+                     (unsigned)config->tap_buttons[index],
+                     (unsigned)index);
+            config->tap_buttons[index] = s_default_tap_buttons[index];
+        }
+    }
+}
+
 const touch_gamepad_board_preset_t *touch_gamepad_get_board_preset(void)
 {
 #if CONFIG_TOUCH_GAMEPAD_BOARD_GUITION
@@ -239,6 +274,7 @@ esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config)
     esp_err_t err = nvs_open(TOUCH_GAMEPAD_NVS_NAMESPACE, NVS_READONLY, &handle);
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "No stored config found, using defaults");
         touch_gamepad_config_set_defaults(config);
         return ESP_OK;
     }
@@ -251,16 +287,17 @@ esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config)
     nvs_close(handle);
 
     if ((err != ESP_OK) || (required_size != sizeof(persisted)) || (persisted.version != 1U)) {
+        ESP_LOGW(TAG,
+                 "Stored config invalid (err=%s size=%u version=%u), using defaults",
+                 esp_err_to_name(err),
+                 (unsigned)required_size,
+                 (unsigned)persisted.version);
         touch_gamepad_config_set_defaults(config);
         return ESP_OK;
     }
 
     touch_gamepad_copy_persisted_to_runtime(&persisted, config);
-
-    if ((!touch_gamepad_get_board_preset()->supports_usb) &&
-        (config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_USB)) {
-        config->transport_mode = TOUCH_GAMEPAD_TRANSPORT_BLE;
-    }
+    touch_gamepad_sanitize_config(config);
 
     return ESP_OK;
 }
@@ -382,7 +419,11 @@ void touch_gamepad_build_mapping_snapshot(const touch_gamepad_config_t *config,
     snapshot->two_finger_slide = config->two_finger_slide;
 
     for (index = 0; index < TOUCH_GAMEPAD_TAP_BINDING_COUNT; ++index) {
-        const uint8_t button = config->tap_buttons[index] % TOUCH_GAMEPAD_BUTTON_LABEL_COUNT;
+        uint8_t button = config->tap_buttons[index];
+
+        if (button >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
+            button = s_default_tap_buttons[index];
+        }
 
         snapshot->tap_bindings[index].button = button;
         snprintf(snapshot->tap_bindings[index].label,
