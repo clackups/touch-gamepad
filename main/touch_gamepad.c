@@ -13,6 +13,8 @@
 #define TOUCH_GAMEPAD_NVS_KEY "config"
 #define TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT 32
 #define TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM 24
+#define TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT_SQUARED (TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT * TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT)
+#define TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM_SQUARED (TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM * TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM)
 
 static const char *TAG = "touch_gamepad";
 
@@ -103,11 +105,9 @@ static bool touch_gamepad_is_tap(const touch_gamepad_touch_frame_t *frame)
     for (index = 0; index < frame->finger_count; ++index) {
         const int16_t delta_x = frame->end[index].x - frame->start[index].x;
         const int16_t delta_y = frame->end[index].y - frame->start[index].y;
+        const int32_t distance_squared = ((int32_t)delta_x * delta_x) + ((int32_t)delta_y * delta_y);
 
-        if ((delta_x < -TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT) ||
-            (delta_x > TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT) ||
-            (delta_y < -TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT) ||
-            (delta_y > TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT)) {
+        if (distance_squared > TOUCH_GAMEPAD_TAP_DISTANCE_LIMIT_SQUARED) {
             return false;
         }
     }
@@ -334,12 +334,10 @@ bool touch_gamepad_detect_gesture(touch_gamepad_gesture_state_t *state,
     if (touch_gamepad_all_points_in_lower_half(frame, preset)) {
         const int16_t delta_x = frame->end[0].x - frame->start[0].x;
         const int16_t delta_y = frame->end[0].y - frame->start[0].y;
+        const int32_t distance_squared = ((int32_t)delta_x * delta_x) + ((int32_t)delta_y * delta_y);
 
         state->expected_corner_index = 0U;
-        if ((delta_x >= -TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM) &&
-            (delta_x <= TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM) &&
-            (delta_y >= -TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM) &&
-            (delta_y <= TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM)) {
+        if (distance_squared <= TOUCH_GAMEPAD_SLIDE_DISTANCE_MINIMUM_SQUARED) {
             return false;
         }
 
