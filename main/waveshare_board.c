@@ -198,18 +198,26 @@ static esp_err_t ws_create_bus(void)
     ws_i2c_bus_recover();
 
     /*
-     * Match the vendor BSP's known-good bus config exactly: only the clock
-     * source, the two pins and the port. Do not set enable_internal_pullup or a
-     * glitch_ignore_cnt override here. The board carries external pull-ups (the
-     * bit-bang recovery above relies on them to read SDA high), and keeping the
-     * config identical to the working Waveshare demo removes every code-level
-     * difference from the proven path.
+     * Enable the ESP32-S3 internal pull-ups and a glitch filter on this bus, the
+     * same way the Guition dedicated-bus path does in touchpad_init(). When the
+     * expander (0x24) and the GT911 (0x5d) both fail with an I2C *timeout* rather
+     * than a NACK, and the driver reports "check if xfer_timeout_ms and pull-ups
+     * are correctly set up", the bus is never idling high: SDA/SCL cannot reach a
+     * valid logic-1, so no device can ACK. That happens when the board's external
+     * pull-ups are absent, marginal, or not yet powered this early in boot. The
+     * ~45 kOhm internal pull-ups parallel any external resistors (they never hurt
+     * a bus that already idles high) and at the 100 kHz expander clock they are
+     * strong enough to pull the lines high on their own, giving the CH32V003 and
+     * the GT911 a bus they can actually drive. glitch_ignore_cnt matches the
+     * touchpad_init() config so both bus-creation paths behave identically.
      */
     const i2c_master_bus_config_t bus_config = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .sda_io_num = BOARD_TOUCH_I2C_SDA_GPIO,
         .scl_io_num = BOARD_TOUCH_I2C_SCL_GPIO,
         .i2c_port = WS_I2C_PORT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
     esp_err_t err = i2c_new_master_bus(&bus_config, &s_i2c_bus);
     if (err != ESP_OK) {
