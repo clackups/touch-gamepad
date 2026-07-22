@@ -108,10 +108,11 @@ CMake presets are also provided (`guition` and `waveshare`) that layer the share
 
 All display and touch pins live in `main/boards.h`. The Guition values come from
 the community and ESPHome reference designs listed above. The Waveshare ESP32-S3-
-Touch-LCD-4 routes the backlight and the LCD / touch reset lines through an
-on-board CH422G I/O expander and may use a different RGB data order; its entries
-mirror the common ST7701 480x480 layout as a provisional default and must be
-verified against the Waveshare schematic before a production build.
+Touch-LCD-4 pins, timing and ST7701 init sequence come from the official
+Waveshare `esp32_s3_touch_lcd_4` BSP. That board routes the backlight and the
+LCD / touch reset lines through an on-board CH32V003 I/O expander (I2C address
+0x24); `waveshare_board_bringup()` releases those reset lines and enables the
+backlight before the display and touch controllers are initialized.
 
 ## Persistence
 
