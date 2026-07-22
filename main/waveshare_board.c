@@ -16,6 +16,12 @@
  * registers directly, and only warns (returning ESP_OK) if those writes fail so
  * that boards without the expander still boot.
  *
+ * Because the CH32V003 keeps running across an ESP32-S3 warm reset, it can leave
+ * the shared I2C bus stuck (SDA held low) from an interrupted transaction. This
+ * code bit-bangs a bus-recovery sequence before installing the I2C driver and
+ * retries the expander writes, mirroring board_i2c_recover() and the retry loop
+ * in the Waveshare ESP32-S3-Touch-LCD-4 ioexpander example.
+ *
  * ASCII only. See AGENTS.md.
  */
 #include "waveshare_board.h"
@@ -28,13 +34,19 @@ static const char *TAG = "waveshare_board";
 
 #if defined(CONFIG_TOUCH_GAMEPAD_BOARD_WAVESHARE)
 
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 /* CH32V003 I/O expander on the shared touch I2C bus. */
 #define WS_EXPANDER_I2C_ADDR 0x24
 #define WS_EXPANDER_I2C_HZ 400000
+
+/* Number of times to retry the expander register writes if the first attempt
+ * is NACKed while the CH32V003 or the bus settles after a warm reset. */
+#define WS_EXPANDER_WRITE_RETRIES 3
 
 /* CH32V003 register map (from the Waveshare custom_io_expander_ch32v003 driver). */
 #define WS_REG_DIRECTION 0x02
@@ -61,8 +73,98 @@ static esp_err_t ws_write_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t 
     return i2c_master_transmit(dev, buf, sizeof(buf), 1000);
 }
 
+/*
+ * Recover a stuck I2C bus before installing the master driver.
+ *
+ * The CH32V003 expander shares the ESP32-S3 power rail but has its own reset
+ * domain, so a warm reset (reflash, EN button, software restart) can restart the
+ * ESP32-S3 while the CH32V003 keeps running. If the CH32V003 (or the GT911) was
+ * mid-transaction it may still be holding SDA low, waiting for more clocks. The
+ * new-master-bus driver then finds the bus stuck and every transaction NACKs
+ * (ESP_ERR_INVALID_RESPONSE), which is exactly the observed failure. Bit-bang up
+ * to nine SCL pulses to clock the slave past the byte it is stuck on, then issue
+ * a STOP so the bus returns to idle. Mirrors board_i2c_recover() from the
+ * Waveshare ESP32-S3-Touch-LCD-4 ioexpander example.
+ */
+static void ws_i2c_bus_recover(void)
+{
+    const gpio_num_t sda = BOARD_TOUCH_I2C_SDA_GPIO;
+    const gpio_num_t scl = BOARD_TOUCH_I2C_SCL_GPIO;
+
+    const gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << sda) | (1ULL << scl),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+    esp_rom_delay_us(20);
+
+    /* Drive SCL as an open-drain output and clock out the stuck slave. */
+    gpio_set_direction(scl, GPIO_MODE_OUTPUT_OD);
+    gpio_set_pull_mode(scl, GPIO_PULLUP_ONLY);
+    gpio_set_level(scl, 1);
+    esp_rom_delay_us(10);
+    for (int i = 0; i < 9 && gpio_get_level(sda) == 0; ++i) {
+        gpio_set_level(scl, 0);
+        esp_rom_delay_us(10);
+        gpio_set_level(scl, 1);
+        esp_rom_delay_us(10);
+    }
+
+    /* Generate a STOP condition: SDA low while SCL high, then release SDA. */
+    gpio_set_direction(sda, GPIO_MODE_OUTPUT_OD);
+    gpio_set_pull_mode(sda, GPIO_PULLUP_ONLY);
+    gpio_set_level(sda, 0);
+    esp_rom_delay_us(10);
+    gpio_set_level(scl, 1);
+    esp_rom_delay_us(10);
+    gpio_set_level(sda, 1);
+    esp_rom_delay_us(10);
+
+    /* Release both lines back to inputs for the I2C driver to take over. */
+    gpio_set_direction(sda, GPIO_MODE_INPUT);
+    gpio_set_direction(scl, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(sda, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(scl, GPIO_PULLUP_ONLY);
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
+
+/*
+ * Configure the expander outputs and release the LCD/touch reset lines: hold the
+ * resets (and enables) low, wait, then drive them high, and finally set the
+ * backlight PWM. Returns the first failing transaction's error so the caller can
+ * retry the whole sequence.
+ */
+static esp_err_t ws_expander_reset_sequence(i2c_master_dev_handle_t dev)
+{
+    /* Direction: every pin an output except RTC_INT. */
+    esp_err_t err = ws_write_reg(dev, WS_REG_DIRECTION, (uint8_t)(0xFF & ~WS_PIN_RTC_INT));
+    /* Drive LCD/touch resets (and enables) low, hold, then release high. */
+    if (err == ESP_OK) {
+        err = ws_write_reg(dev, WS_REG_OUTPUT, 0x00);
+    }
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        err = ws_write_reg(dev, WS_REG_OUTPUT,
+                           WS_PIN_SYS_EN | WS_PIN_LCD_RST | WS_PIN_TOUCH_RST);
+    }
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        err = ws_write_reg(dev, WS_REG_PWM, WS_PWM_FULL_BRIGHTNESS);
+    }
+    return err;
+}
+
 esp_err_t waveshare_board_bringup(void)
 {
+    /*
+     * Clear a bus left stuck by the CH32V003 (or GT911) after a warm reset
+     * before the I2C driver takes over, otherwise the first transaction NACKs.
+     */
+    ws_i2c_bus_recover();
+
     const i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_NUM_0,
         .sda_io_num = BOARD_TOUCH_I2C_SDA_GPIO,
@@ -99,21 +201,20 @@ esp_err_t waveshare_board_bringup(void)
         return err;
     }
 
-    /* Direction: every pin an output except RTC_INT. */
-    err = ws_write_reg(dev_handle, WS_REG_DIRECTION,
-                       (uint8_t)(0xFF & ~WS_PIN_RTC_INT));
-    /* Drive LCD/touch resets (and enables) low, hold, then release high. */
-    if (err == ESP_OK) {
-        err = ws_write_reg(dev_handle, WS_REG_OUTPUT, 0x00);
-    }
-    if (err == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-        err = ws_write_reg(dev_handle, WS_REG_OUTPUT,
-                           WS_PIN_SYS_EN | WS_PIN_LCD_RST | WS_PIN_TOUCH_RST);
-    }
-    if (err == ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-        err = ws_write_reg(dev_handle, WS_REG_PWM, WS_PWM_FULL_BRIGHTNESS);
+    /*
+     * Retry the whole register sequence a few times: right after a warm reset
+     * the first transaction can still NACK while the CH32V003 finishes booting
+     * or the bus settles. Mirrors the retry loop in the Waveshare ioexpander
+     * example.
+     */
+    for (int attempt = 0; attempt < WS_EXPANDER_WRITE_RETRIES; ++attempt) {
+        err = ws_expander_reset_sequence(dev_handle);
+        if (err == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "expander write attempt %d failed: %s",
+                 attempt + 1, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(20 + attempt * 20));
     }
 
     if (err != ESP_OK) {
