@@ -13,6 +13,15 @@ choice TOUCH_GAMEPAD_BOARD
         bool "Waveshare ESP32-S3-Touch-LCD-4"
 endchoice
 
+config TOUCH_GAMEPAD_ENABLE_USB
+    bool "Compile the USB HID gamepad backend"
+    default y if TOUCH_GAMEPAD_BOARD_WAVESHARE
+    default n
+    help
+        Enable the TinyUSB HID gamepad backend. Only boards that expose a USB
+        device port (Waveshare ESP32-S3-Touch-LCD-4) can act as a USB gamepad.
+        The Guition ESP32-S3-4848S040 has no exposed USB port and stays BLE only.
+
 config TOUCH_GAMEPAD_SCREEN_WIDTH
     int "Display width"
     default 480
