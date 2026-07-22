@@ -342,7 +342,7 @@ static void ws_i2c_scan(void)
         if (i2c_master_bus_add_device(s_i2c_bus, &dev_config, &dev_handle) != ESP_OK) {
             continue;
         }
-        const uint8_t reg = WS_REG_INPUT; /* Harmless read of the input register. */
+        const uint8_t reg = WS_REG_INPUT; /* Harmless single-byte write (register pointer). */
         if (i2c_master_transmit(dev_handle, &reg, sizeof(reg), 100) == ESP_OK) {
             ESP_LOGW(TAG, "  device ACK at 0x%02x", addr);
             ++found;
