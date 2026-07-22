@@ -64,6 +64,8 @@ static const char *TAG = "waveshare_board";
  * vendor's working path reaches the expander only after lvgl_port_init() runs,
  * so it has an implicit gap between bus creation and the first transaction; a
  * freshly recovered bus and a just-reset CH32V003 both benefit from the pause.
+ * 150 ms is generous on purpose: it is a one-time boot cost that comfortably
+ * covers the CH32V003 software-I2C slave finishing its own start-up.
  */
 #define WS_EXPANDER_SETTLE_MS 150
 

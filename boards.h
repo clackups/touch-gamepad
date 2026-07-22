@@ -1,3 +1,0 @@
-#pragma once
-#define BOARD_TOUCH_I2C_SDA_GPIO 15
-#define BOARD_TOUCH_I2C_SCL_GPIO 7
