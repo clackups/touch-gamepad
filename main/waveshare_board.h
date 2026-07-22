@@ -11,6 +11,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,16 @@ extern "C" {
  * returns ESP_OK so boards without it (or older hardware revisions) still boot.
  */
 esp_err_t waveshare_board_bringup(void);
+
+/*
+ * Return the shared I2C master bus that waveshare_board_bringup() created for
+ * the CH32V003 expander, or NULL when there is no such bus (non-Waveshare board,
+ * or the bus could not be created). The GT911 touch driver reuses this handle so
+ * the expander and the touch controller share one recovered bus, mirroring the
+ * Waveshare BSP where a single i2c_master bus serves both devices. Ownership
+ * stays with this module; callers must not delete the returned bus.
+ */
+i2c_master_bus_handle_t waveshare_board_get_i2c_bus(void);
 
 #ifdef __cplusplus
 }
