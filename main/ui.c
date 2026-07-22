@@ -58,22 +58,35 @@ static ui_theme_colors_t ui_theme_lookup(touch_gamepad_theme_t theme)
 
 static void ui_apply_theme_locked(void)
 {
+    /*
+     * lv_obj_remove_style_all() clears the default opaque background, and the
+     * LVGL default for LV_STYLE_BG_OPA is transparent (unlike border/text opa).
+     * A transparent screen background is never painted, so on the RGB panel's
+     * alternating frame buffers old content is never erased and new output is
+     * drawn on top of it. Force every filled surface opaque so each refresh
+     * clears the frame buffer.
+     */
     lv_obj_set_style_bg_color(s_screen, s_colors.background, 0);
+    lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
 
     for (int i = 0; i < UI_TAP_ZONE_COUNT; ++i) {
         lv_obj_set_style_bg_color(s_zones[i], s_colors.background, 0);
+        lv_obj_set_style_bg_opa(s_zones[i], LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(s_zones[i], s_colors.foreground, 0);
         lv_obj_set_style_text_color(s_zone_labels[i], s_colors.foreground, 0);
     }
 
     lv_obj_set_style_bg_color(s_slide_area, s_colors.background, 0);
+    lv_obj_set_style_bg_opa(s_slide_area, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_slide_area, s_colors.foreground, 0);
     lv_obj_set_style_bg_color(s_slide_marker, s_colors.accent, 0);
+    lv_obj_set_style_bg_opa(s_slide_marker, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_slide_marker, s_colors.foreground, 0);
     lv_obj_set_style_text_color(s_status_label, s_colors.foreground, 0);
 
     if (s_menu_overlay != NULL) {
         lv_obj_set_style_bg_color(s_menu_overlay, s_colors.background, 0);
+        lv_obj_set_style_bg_opa(s_menu_overlay, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(s_menu_overlay, s_colors.foreground, 0);
     }
 }
@@ -255,6 +268,7 @@ void ui_show_menu(const touch_gamepad_menu_state_t *menu,
     }
 
     lv_obj_set_style_bg_color(s_menu_overlay, s_colors.background, 0);
+    lv_obj_set_style_bg_opa(s_menu_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_menu_overlay, s_colors.foreground, 0);
     lv_obj_clean(s_menu_list);
 

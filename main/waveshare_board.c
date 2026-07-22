@@ -9,6 +9,13 @@
  * bus for the display and touch drivers. The expander latches its output state,
  * so the reset lines stay released after the bus is torn down.
  *
+ * The CH32V003 runs custom I2C-slave firmware that does not acknowledge the
+ * zero-length transaction issued by i2c_master_probe(), so probing it reports
+ * the device as absent even when it is present. Following the Waveshare BSP,
+ * this code does not probe the expander: it adds the device and writes the
+ * registers directly, and only warns (returning ESP_OK) if those writes fail so
+ * that boards without the expander still boot.
+ *
  * ASCII only. See AGENTS.md.
  */
 #include "waveshare_board.h"
@@ -71,13 +78,14 @@ esp_err_t waveshare_board_bringup(void)
         return err;
     }
 
-    if (i2c_master_probe(bus_handle, WS_EXPANDER_I2C_ADDR, 1000) != ESP_OK) {
-        ESP_LOGW(TAG, "CH32V003 expander (0x%02x) not found; skipping reset release",
-                 WS_EXPANDER_I2C_ADDR);
-        i2c_del_master_bus(bus_handle);
-        return ESP_OK;
-    }
-
+    /*
+     * Do not probe the expander first. The CH32V003 custom I2C-slave firmware
+     * does not answer the zero-length transaction issued by i2c_master_probe(),
+     * so a probe reports it as absent even when present (this is why the panel
+     * stayed dark and GT911 init failed). The Waveshare BSP skips the probe too
+     * and drives the registers directly; the register writes below are the real
+     * presence test.
+     */
     const i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = WS_EXPANDER_I2C_ADDR,
@@ -109,14 +117,16 @@ esp_err_t waveshare_board_bringup(void)
     }
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "expander reset sequence failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG,
+                 "CH32V003 expander (0x%02x) unreachable (%s); continuing without reset release",
+                 WS_EXPANDER_I2C_ADDR, esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "CH32V003 released LCD/touch reset lines");
     }
 
     i2c_master_bus_rm_device(dev_handle);
     i2c_del_master_bus(bus_handle);
-    return err;
+    return ESP_OK;
 }
 
 #else /* !CONFIG_TOUCH_GAMEPAD_BOARD_WAVESHARE */
