@@ -113,7 +113,14 @@ static esp_err_t display_panel_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7701(io_handle, &panel_config, &s_panel), TAG, "st7701 panel");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "panel on");
+    /*
+     * Do not call esp_lcd_panel_disp_on_off() here. With auto_del_panel_io set,
+     * the ST7701 driver sends the init sequence (which already includes the
+     * display-on command 0x29) and then deletes the 3-wire SPI IO. Because
+     * disp_gpio_num is -1 the driver routes display on/off through that IO, so a
+     * later disp_on_off call would fail with "Panel IO is deleted". The panel is
+     * already on once the RGB signals are running.
+     */
     return ESP_OK;
 }
 
