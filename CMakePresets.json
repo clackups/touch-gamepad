@@ -6,7 +6,7 @@
             "binaryDir": "build/guition",
             "displayName": "Guition 480x480",
             "cacheVariables": {
-                "SDKCONFIG_DEFAULTS": "sdkconfig.defaults.guition",
+                "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.guition",
                 "SDKCONFIG": "./build/guition/sdkconfig"
             }
         },
@@ -15,7 +15,7 @@
             "binaryDir": "build/waveshare",
             "displayName": "Waveshare 480x480",
             "cacheVariables": {
-                "SDKCONFIG_DEFAULTS": "sdkconfig.defaults.waveshare",
+                "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.waveshare",
                 "SDKCONFIG": "./build/waveshare/sdkconfig"
             }
         }

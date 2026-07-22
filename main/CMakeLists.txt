@@ -1,9 +1,24 @@
+set(srcs
+    "main.c"
+    "touch_gamepad.c"
+    "display.c"
+    "touchpad.c"
+    "ui.c"
+    "gamepad_backend.c"
+    "ble_gamepad.c"
+    "usb_gamepad.c"
+)
+
 idf_component_register(
     SRCS
-        "main.c"
-        "touch_gamepad.c"
+        ${srcs}
     INCLUDE_DIRS
         "."
     REQUIRES
         nvs_flash
+        driver
+        esp_timer
+        esp_lcd
+        esp_hid
+        bt
 )

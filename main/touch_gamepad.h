@@ -108,6 +108,10 @@ const char *touch_gamepad_transport_name(touch_gamepad_transport_t transport_mod
 const char *touch_gamepad_theme_name(touch_gamepad_theme_t theme);
 const char *touch_gamepad_menu_item_name(touch_gamepad_menu_item_t item);
 
+/* Number of assignable gamepad buttons and the label for a given button. */
+uint8_t touch_gamepad_button_count(void);
+const char *touch_gamepad_button_label(uint8_t button);
+
 void touch_gamepad_config_set_defaults(touch_gamepad_config_t *config);
 esp_err_t touch_gamepad_config_load(touch_gamepad_config_t *config);
 esp_err_t touch_gamepad_config_save(const touch_gamepad_config_t *config);

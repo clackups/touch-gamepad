@@ -250,6 +250,19 @@ const char *touch_gamepad_menu_item_name(touch_gamepad_menu_item_t item)
     }
 }
 
+uint8_t touch_gamepad_button_count(void)
+{
+    return TOUCH_GAMEPAD_BUTTON_LABEL_COUNT;
+}
+
+const char *touch_gamepad_button_label(uint8_t button)
+{
+    if (button >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
+        return "?";
+    }
+    return s_button_labels[button];
+}
+
 void touch_gamepad_config_set_defaults(touch_gamepad_config_t *config)
 {
     const touch_gamepad_board_preset_t *preset = touch_gamepad_get_board_preset();
