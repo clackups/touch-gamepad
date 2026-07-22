@@ -83,7 +83,6 @@ static esp_err_t display_panel_init(void)
         .clk_src = LCD_CLK_SRC_DEFAULT,
         .dma_burst_size = 64,
         .data_width = 16,
-        .bits_per_pixel = BOARD_LCD_BITS_PER_PIXEL,
         .de_gpio_num = BOARD_LCD_DE_GPIO,
         .pclk_gpio_num = BOARD_LCD_PCLK_GPIO,
         .vsync_gpio_num = BOARD_LCD_VSYNC_GPIO,
