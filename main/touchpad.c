@@ -29,11 +29,11 @@ esp_err_t touchpad_init(void)
 {
     /*
      * Reuse the shared I2C bus the Waveshare bring-up already created for the
-     * CH32V003 expander when it is available. That bus lives on the same I2C
-     * port and pins as the GT911, so opening a second bus here would fail; it
-     * also carries the bit-bang recovery the expander bring-up performed. On
-     * boards without an expander (Guition) there is no shared bus, so create a
-     * dedicated one here.
+     * I/O expander (CH32V003 or TCA9554) when it is available. That bus lives on
+     * the same I2C port and pins as the GT911, so opening a second bus here would
+     * fail; it also carries the bit-bang recovery the expander bring-up
+     * performed. On boards without an expander (Guition) there is no shared bus,
+     * so create a dedicated one here.
      */
     i2c_master_bus_handle_t bus_handle = waveshare_board_get_i2c_bus();
     if (bus_handle == NULL) {

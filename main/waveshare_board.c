@@ -83,7 +83,7 @@ static const char *TAG = "waveshare_board";
 #define WS_DIR_ALL_OUTPUTS_EXCEPT_RTC (WS_PIN_RTC_INT)
 #define WS_EXPANDER_HAS_PWM 0
 
-#else /* CONFIG_TOUCH_GAMEPAD_WAVESHARE_EXPANDER_CH32V003 */
+#else /* CONFIG_TOUCH_GAMEPAD_WAVESHARE_EXPANDER_CH32V003 (default) */
 
 #define WS_EXPANDER_I2C_ADDR 0x24
 #define WS_EXPANDER_NAME "CH32V003"
@@ -342,7 +342,7 @@ static void ws_i2c_scan(void)
         if (i2c_master_bus_add_device(s_i2c_bus, &dev_config, &dev_handle) != ESP_OK) {
             continue;
         }
-        const uint8_t reg = WS_REG_INPUT; /* Harmless input-reg pointer set. */
+        const uint8_t reg = WS_REG_INPUT; /* Harmless read of the input register. */
         if (i2c_master_transmit(dev_handle, &reg, sizeof(reg), 100) == ESP_OK) {
             ESP_LOGW(TAG, "  device ACK at 0x%02x", addr);
             ++found;

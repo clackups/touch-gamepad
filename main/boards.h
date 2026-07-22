@@ -76,10 +76,11 @@ extern "C" {
 
 /*
  * The Waveshare ESP32-S3-Touch-LCD-4 routes the backlight, LCD reset and touch
- * reset through an on-board CH32V003 I/O expander (I2C address 0x24) rather than
- * through dedicated ESP32-S3 GPIOs, so those lines are marked unused (-1) here
- * and released by waveshare_board_bringup() before the display and touch come
- * up. All pins below match the official Waveshare esp32_s3_touch_lcd_4 BSP.
+ * reset through an on-board I2C I/O expander (a CH32V003 at 0x24 or a TCA9554 at
+ * 0x20, selected in Kconfig) rather than through dedicated ESP32-S3 GPIOs, so
+ * those lines are marked unused (-1) here and released by
+ * waveshare_board_bringup() before the display and touch come up. All pins below
+ * match the official Waveshare esp32_s3_touch_lcd_4 BSP.
  */
 #define BOARD_LCD_BL_GPIO (-1)
 #define BOARD_LCD_BL_ON_LEVEL 1
