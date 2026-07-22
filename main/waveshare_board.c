@@ -20,11 +20,11 @@
  *
  * Because the CH32V003 keeps running across an ESP32-S3 warm reset, it can leave
  * the shared I2C bus stuck (SDA held low) from an interrupted transaction. This
- * code bit-bangs a bus-recovery sequence before installing the I2C driver and
- * retries the expander bring-up. If a whole attempt still fails, the bus is torn
- * down, recovered again and rebuilt so the recovery runs on every retry rather
- * than only once, mirroring board_i2c_recover() and the retry loop in the
- * Waveshare ESP32-S3-Touch-LCD-4 ioexpander example.
+ * code bit-bangs a bus-recovery sequence before installing the I2C driver, lets
+ * the bus settle, then retries the expander writes on the same persistent bus,
+ * mirroring board_i2c_recover() plus the retry loop in the Waveshare
+ * ESP32-S3-Touch-LCD-4 ioexpander example. If the expander still never answers,
+ * a diagnostic address scan logs whatever does respond on the bus.
  *
  * ASCII only. See AGENTS.md.
  */
@@ -46,13 +46,26 @@ static const char *TAG = "waveshare_board";
 
 /* CH32V003 I/O expander on the shared touch I2C bus. */
 #define WS_EXPANDER_I2C_ADDR 0x24
-#define WS_EXPANDER_I2C_HZ 400000
+/*
+ * Access the expander at 100 kHz rather than the vendor's 400 kHz. The expander
+ * is only touched once at boot, so the lower clock costs nothing but gives the
+ * CH32V003's software I2C slave and any marginal bus rise time extra margin to
+ * ACK its address on the very first transaction after a reset.
+ */
+#define WS_EXPANDER_I2C_HZ 100000
 #define WS_I2C_PORT I2C_NUM_0
 
-/* Number of times to retry the whole expander bring-up (bus recovery, bus
- * create and register writes) if it fails while the CH32V003 or the bus settles
- * after a warm reset. */
+/* Number of times to retry the expander register writes on the shared bus if the
+ * first attempt is NACKed while the CH32V003 or the bus settles after a reset. */
 #define WS_EXPANDER_WRITE_RETRIES 3
+
+/*
+ * Settle delay after the bus is created and before the first expander write. The
+ * vendor's working path reaches the expander only after lvgl_port_init() runs,
+ * so it has an implicit gap between bus creation and the first transaction; a
+ * freshly recovered bus and a just-reset CH32V003 both benefit from the pause.
+ */
+#define WS_EXPANDER_SETTLE_MS 150
 
 /* CH32V003 register map (from the Waveshare custom_io_expander_ch32v003 driver). */
 #define WS_REG_DIRECTION 0x02
@@ -182,13 +195,19 @@ static esp_err_t ws_create_bus(void)
      */
     ws_i2c_bus_recover();
 
+    /*
+     * Match the vendor BSP's known-good bus config exactly: only the clock
+     * source, the two pins and the port. Do not set enable_internal_pullup or a
+     * glitch_ignore_cnt override here. The board carries external pull-ups (the
+     * bit-bang recovery above relies on them to read SDA high), and keeping the
+     * config identical to the working Waveshare demo removes every code-level
+     * difference from the proven path.
+     */
     const i2c_master_bus_config_t bus_config = {
-        .i2c_port = WS_I2C_PORT,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
         .sda_io_num = BOARD_TOUCH_I2C_SDA_GPIO,
         .scl_io_num = BOARD_TOUCH_I2C_SCL_GPIO,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+        .i2c_port = WS_I2C_PORT,
     };
     esp_err_t err = i2c_new_master_bus(&bus_config, &s_i2c_bus);
     if (err != ESP_OK) {
@@ -230,53 +249,84 @@ static esp_err_t ws_try_expander(void)
     return err;
 }
 
+/*
+ * Diagnostic: scan the 7-bit address space with a harmless single-byte write and
+ * log every address that ACKs. Run only when the expander stays unreachable, to
+ * tell whether any device answers on the bus at all (an empty scan points at
+ * wiring, pull-ups or a wedged CH32V003 that only a power cycle clears; an ACK at
+ * an unexpected address points at a different expander address). The GT911 is
+ * held in reset here, so normally only the expander can answer. Writing one byte
+ * (a register pointer) is non-destructive on this bus.
+ */
+static void ws_i2c_scan(void)
+{
+    if (s_i2c_bus == NULL) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "Scanning I2C bus (SDA=%d SCL=%d) for any responding device...",
+             (int)BOARD_TOUCH_I2C_SDA_GPIO, (int)BOARD_TOUCH_I2C_SCL_GPIO);
+
+    int found = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; ++addr) {
+        const i2c_device_config_t dev_config = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = addr,
+            .scl_speed_hz = WS_EXPANDER_I2C_HZ,
+        };
+        i2c_master_dev_handle_t dev_handle = NULL;
+        if (i2c_master_bus_add_device(s_i2c_bus, &dev_config, &dev_handle) != ESP_OK) {
+            continue;
+        }
+        const uint8_t reg = 0x04; /* CH32V003 INPUT_REG; harmless pointer set. */
+        if (i2c_master_transmit(dev_handle, &reg, sizeof(reg), 100) == ESP_OK) {
+            ESP_LOGW(TAG, "  device ACK at 0x%02x", addr);
+            ++found;
+        }
+        i2c_master_bus_rm_device(dev_handle);
+    }
+
+    if (found == 0) {
+        ESP_LOGW(TAG, "  no devices responded: check the CH32V003 power/wiring or power-cycle the board");
+    }
+}
+
 esp_err_t waveshare_board_bringup(void)
 {
     /*
-     * Retry the whole bring-up a few times. Right after a warm reset the first
-     * transaction can NACK while the CH32V003 finishes booting or the shared bus
-     * settles, and a single transaction can re-wedge a bus the recovery just
-     * freed. Rebuilding the bus (which re-runs the bit-bang recovery) on every
-     * retry gives the recovery multiple chances, mirroring the retry loop in the
-     * Waveshare ioexpander example. The bus is created once and kept alive so the
-     * GT911 touch driver can reuse it through waveshare_board_get_i2c_bus().
+     * Recover the bus once and create the persistent shared bus once, then retry
+     * only the expander writes on that same bus. This mirrors the Waveshare
+     * ioexpander example, which calls board_i2c_recover() + i2c_new_master_bus()
+     * a single time and retries custom_io_expander_new_i2c_ch32v003() on the same
+     * bus. The bus is kept alive so the GT911 touch driver can reuse it through
+     * waveshare_board_get_i2c_bus().
      */
+    if (ws_create_bus() != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "CH32V003 expander (0x%02x) unreachable (no I2C bus); continuing without reset release",
+                 WS_EXPANDER_I2C_ADDR);
+        return ESP_OK;
+    }
+
+    /* Let the recovered bus and a just-reset CH32V003 settle before the first write. */
+    vTaskDelay(pdMS_TO_TICKS(WS_EXPANDER_SETTLE_MS));
+
     esp_err_t err = ESP_FAIL;
     for (int attempt = 0; attempt < WS_EXPANDER_WRITE_RETRIES; ++attempt) {
-        if (s_i2c_bus == NULL && ws_create_bus() != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(20 + attempt * 20));
-            continue;
-        }
-
         err = ws_try_expander();
         if (err == ESP_OK) {
             break;
         }
-
         ESP_LOGW(TAG, "expander bring-up attempt %d failed: %s",
                  attempt + 1, esp_err_to_name(err));
-
-        /*
-         * Tear the bus down so the next iteration re-runs the recovery and
-         * rebuilds it. Keep the bus on the final iteration so the GT911 still
-         * has a (recovered) bus to share even when the expander never answered.
-         */
-        if (attempt + 1 < WS_EXPANDER_WRITE_RETRIES) {
-            i2c_del_master_bus(s_i2c_bus);
-            s_i2c_bus = NULL;
-        }
         vTaskDelay(pdMS_TO_TICKS(20 + attempt * 20));
-    }
-
-    /* Ensure a bus exists for the GT911 even if every attempt failed to build one. */
-    if (s_i2c_bus == NULL) {
-        ws_create_bus();
     }
 
     if (err != ESP_OK) {
         ESP_LOGW(TAG,
                  "CH32V003 expander (0x%02x) unreachable (%s); continuing without reset release",
                  WS_EXPANDER_I2C_ADDR, esp_err_to_name(err));
+        ws_i2c_scan();
     } else {
         ESP_LOGI(TAG, "CH32V003 released LCD/touch reset lines");
     }
