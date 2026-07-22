@@ -23,6 +23,7 @@
 static const char *TAG = "ui";
 
 #define UI_TAP_ZONE_COUNT 4
+#define UI_AXIS_INDEX_MASK 0x3
 
 typedef struct {
     lv_color_t background;
@@ -169,7 +170,7 @@ void ui_flash_tap(uint8_t zone, uint8_t finger_count)
         return;
     }
     lv_obj_set_style_bg_color(s_zones[zone], s_colors.accent, 0);
-    lv_label_set_text_fmt(s_zone_labels[zone], "Zone %d\n%d finger", zone + 1, finger_count);
+    lv_label_set_text_fmt(s_zone_labels[zone], "Zone %d\n%d-finger", zone + 1, finger_count);
     display_unlock();
 }
 
@@ -309,14 +310,14 @@ void ui_show_mapping(const touch_gamepad_config_t *config,
 
     lv_obj_t *slide1 = lv_label_create(s_menu_list);
     lv_label_set_text_fmt(slide1, "1-finger slide: %s/%s",
-                          axis_names[config->one_finger_slide.axis_x & 3],
-                          axis_names[config->one_finger_slide.axis_y & 3]);
+                          axis_names[config->one_finger_slide.axis_x & UI_AXIS_INDEX_MASK],
+                          axis_names[config->one_finger_slide.axis_y & UI_AXIS_INDEX_MASK]);
     lv_obj_set_style_text_color(slide1, s_colors.foreground, 0);
 
     lv_obj_t *slide2 = lv_label_create(s_menu_list);
     lv_label_set_text_fmt(slide2, "2-finger slide: %s/%s",
-                          axis_names[config->two_finger_slide.axis_x & 3],
-                          axis_names[config->two_finger_slide.axis_y & 3]);
+                          axis_names[config->two_finger_slide.axis_x & UI_AXIS_INDEX_MASK],
+                          axis_names[config->two_finger_slide.axis_y & UI_AXIS_INDEX_MASK]);
     lv_obj_set_style_text_color(slide2, s_colors.foreground, 0);
 
     (void)preset;

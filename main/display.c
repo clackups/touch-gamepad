@@ -165,6 +165,10 @@ esp_err_t display_init(lv_display_t **out_display)
 
 bool display_lock(int timeout_ms)
 {
+    /*
+     * esp_lvgl_port treats a timeout of 0 as "wait forever", so map a negative
+     * request (block indefinitely) onto 0 and pass positive timeouts through.
+     */
     return lvgl_port_lock(timeout_ms < 0 ? 0 : (uint32_t)timeout_ms);
 }
 
