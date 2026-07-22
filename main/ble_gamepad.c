@@ -30,39 +30,50 @@ static esp_hidd_dev_t *s_hid_dev = NULL;
 static volatile bool s_connected = false;
 static volatile bool s_started = false;
 
-/* HID over GATT appearance value for a gamepad. */
-#define BLE_GAMEPAD_APPEARANCE 0x03C4
+/* Single extended advertising set used for the gamepad. The ESP32-S3 controller
+ * only builds the BLE 5.0 feature set, so advertising uses the extended
+ * advertising API. Legacy advertising PDUs are still emitted (LEGACY_IND) so
+ * that hosts scanning with a legacy scanner can discover the gamepad. */
+#define BLE_GAMEPAD_ADV_INSTANCE 0
+#define BLE_GAMEPAD_ADV_SET_COUNT 1
 
-static esp_ble_adv_data_t s_adv_data = {
-    .set_scan_rsp = false,
-    .include_name = true,
-    .include_txpower = true,
-    .min_interval = 0x0006,
-    .max_interval = 0x0010,
-    .appearance = BLE_GAMEPAD_APPEARANCE,
-    .manufacturer_len = 0,
-    .p_manufacturer_data = NULL,
-    .service_data_len = 0,
-    .p_service_data = NULL,
-    .service_uuid_len = 0,
-    .p_service_uuid = NULL,
-    .flag = 0x6,
+/* Raw advertising payload: flags, gamepad appearance (0x03C4), the HID service
+ * UUID (0x1812), and the complete local name. */
+static uint8_t s_ext_adv_raw_data[] = {
+    0x02, ESP_BLE_AD_TYPE_FLAG, 0x06,
+    0x03, ESP_BLE_AD_TYPE_APPEARANCE, 0xC4, 0x03,
+    0x03, ESP_BLE_AD_TYPE_16SRV_CMPL, 0x12, 0x18,
+    0x0E, ESP_BLE_AD_TYPE_NAME_CMPL, 'T', 'o', 'u', 'c', 'h', ' ', 'G', 'a', 'm', 'e', 'p', 'a', 'd',
 };
 
-static esp_ble_adv_params_t s_adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x30,
-    .adv_type = ADV_TYPE_IND,
-    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+static esp_ble_gap_ext_adv_params_t s_ext_adv_params = {
+    .type = ESP_BLE_GAP_SET_EXT_ADV_PROP_LEGACY_IND,
+    .interval_min = 0x20,
+    .interval_max = 0x30,
     .channel_map = ADV_CHNL_ALL,
-    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+    .filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+    .primary_phy = ESP_BLE_GAP_PHY_1M,
+    .max_skip = 0,
+    .secondary_phy = ESP_BLE_GAP_PHY_1M,
+    .sid = 0,
+    .scan_req_notif = false,
+    .tx_power = EXT_ADV_TX_PWR_NO_PREFERENCE,
+};
+
+static esp_ble_gap_ext_adv_t s_ext_adv[BLE_GAMEPAD_ADV_SET_COUNT] = {
+    { .instance = BLE_GAMEPAD_ADV_INSTANCE, .duration = 0, .max_events = 0 },
 };
 
 static void ble_gamepad_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
-    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-        esp_ble_gap_start_advertising(&s_adv_params);
+    case ESP_GAP_BLE_EXT_ADV_SET_PARAMS_COMPLETE_EVT:
+        esp_ble_gap_config_ext_adv_data_raw(BLE_GAMEPAD_ADV_INSTANCE, sizeof(s_ext_adv_raw_data),
+                                            s_ext_adv_raw_data);
+        break;
+    case ESP_GAP_BLE_EXT_ADV_DATA_SET_COMPLETE_EVT:
+        esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
         break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
@@ -86,7 +97,7 @@ static void ble_gamepad_hidd_event(void *handler_args, esp_event_base_t base, in
     switch (event) {
     case ESP_HIDD_START_EVENT:
         esp_ble_gap_set_device_name("Touch Gamepad");
-        esp_ble_gap_config_adv_data(&s_adv_data);
+        esp_ble_gap_ext_adv_set_params(BLE_GAMEPAD_ADV_INSTANCE, &s_ext_adv_params);
         break;
     case ESP_HIDD_CONNECT_EVENT:
         s_connected = true;
@@ -95,7 +106,7 @@ static void ble_gamepad_hidd_event(void *handler_args, esp_event_base_t base, in
     case ESP_HIDD_DISCONNECT_EVENT:
         s_connected = false;
         ESP_LOGI(TAG, "Host disconnected, advertising again");
-        esp_ble_gap_start_advertising(&s_adv_params);
+        esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
         break;
     default:
         break;
@@ -245,6 +256,7 @@ esp_err_t ble_gamepad_restart_pairing(void)
 
     ESP_LOGI(TAG, "Clearing bonds and restarting advertising for re-pairing");
     ble_gamepad_remove_all_bonds();
-    esp_ble_gap_stop_advertising();
-    return esp_ble_gap_start_advertising(&s_adv_params);
+    uint8_t adv_instance = BLE_GAMEPAD_ADV_INSTANCE;
+    esp_ble_gap_ext_adv_stop(BLE_GAMEPAD_ADV_SET_COUNT, &adv_instance);
+    return esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
 }

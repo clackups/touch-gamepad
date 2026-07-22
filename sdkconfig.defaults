@@ -22,5 +22,9 @@ CONFIG_BT_BLE_ENABLED=y
 CONFIG_BT_GATTS_ENABLE=y
 CONFIG_BT_CLASSIC_ENABLED=n
 
+# The ESP32-S3 controller is BLE 5.0; the HID backend advertises through the
+# extended advertising API, which requires the BLE 5.0 feature set.
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=y
+
 # LVGL color depth matches the RGB565 panel.
 CONFIG_LV_COLOR_DEPTH_16=y
