@@ -10,12 +10,20 @@ resulting buttons and joystick axes over BLE HID or (on capable boards) USB HID.
 | Board | Display | Touch | Transports |
 | ----- | ------- | ----- | ---------- |
 | Guition ESP32-S3-4848S040 | 480x480 ST7701 RGB | GT911 | BLE only |
-| Waveshare ESP32-S3-Touch-LCD-4 | 480x480 ST7701 RGB | GT911 | BLE or USB |
+| Waveshare ESP32-S3-Touch-LCD-4 (untested) | 480x480 ST7701 RGB | GT911 | BLE or USB |
+
+> **Warning: the Waveshare ESP32-S3-Touch-LCD-4 support is untested and
+> unreliable.** It has not been verified on real hardware, and even the official
+> Waveshare demos do not run correctly on the unit used for development, which
+> points to faulty hardware. Treat this board as experimental: the pin map,
+> bring-up sequence and transports may not work. The Guition ESP32-S3-4848S040 is
+> the supported, working target.
 
 The Guition ESP32-S3-4848S040 does not expose a USB device port, so it acts only
-as a BLE gamepad. The Waveshare ESP32-S3-Touch-LCD-4 can act as either a BLE or a
-USB gamepad; the active transport is chosen from the configuration menu and is
-persisted across reboots.
+as a BLE gamepad. The Waveshare ESP32-S3-Touch-LCD-4 is intended to act as either
+a BLE or a USB gamepad, with the active transport chosen from the configuration
+menu and persisted across reboots, but see the warning above about its untested
+state.
 
 Reference material for the two boards:
 
@@ -140,3 +148,9 @@ system with the managed components above; it is intended to be built and flashed
 with the commands in the Building section. Because the panel and touch pin maps
 (especially for the Waveshare board) come from vendor references, confirm them on
 the target hardware before relying on a build.
+
+The Guition ESP32-S3-4848S040 preset is the validated target. The Waveshare
+ESP32-S3-Touch-LCD-4 preset is **untested and unreliable**: it has not been
+confirmed on hardware, and the reference unit fails to run even the official
+Waveshare demos (a likely hardware fault), so its bring-up and transports should
+be considered experimental.

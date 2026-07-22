@@ -283,11 +283,22 @@ static void app_event_loop(void)
                     tracker.last[i] = points[i];
                 }
             } else {
+                for (uint8_t i = 0; i < count && i < TOUCHPAD_MAX_POINTS; ++i) {
+                    if (i >= tracker.finger_count) {
+                        /*
+                         * A finger that lands after the initial touch-down.
+                         * Record its starting position so multi-finger taps are
+                         * measured from where each finger actually touched down;
+                         * otherwise its start stays at the origin and the tap is
+                         * misread as a large slide, which breaks two-finger tap
+                         * gestures such as menu activation.
+                         */
+                        tracker.start[i] = points[i];
+                    }
+                    tracker.last[i] = points[i];
+                }
                 if (count > tracker.finger_count) {
                     tracker.finger_count = count;
-                }
-                for (uint8_t i = 0; i < count && i < TOUCHPAD_MAX_POINTS; ++i) {
-                    tracker.last[i] = points[i];
                 }
             }
         } else if (tracker.active) {

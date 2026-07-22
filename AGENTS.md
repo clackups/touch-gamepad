@@ -7,8 +7,10 @@ emulate a BLE or USB gamepad.
 
 ## Current board presets
 
-- Guition ESP32-S3-4848S040: BLE only
-- Waveshare ESP32-S3-Touch-LCD-4: BLE or USB
+- Guition ESP32-S3-4848S040: BLE only (validated, primary target)
+- Waveshare ESP32-S3-Touch-LCD-4: BLE or USB (untested and unreliable; the
+  reference unit does not run even the official Waveshare demos, so treat this
+  preset as experimental)
 
 ## Source layout
 
