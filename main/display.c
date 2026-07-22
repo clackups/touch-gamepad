@@ -22,6 +22,17 @@
 
 static const char *TAG = "display";
 
+/*
+ * Height (in scan lines) of the internal SRAM bounce buffer used by the RGB
+ * panel. Without a bounce buffer the LCD DMA reads pixels straight from PSRAM
+ * over the shared AHB bus; under heavy PSRAM traffic those reads stall and the
+ * panel shows random colorful parallel lines instead of the framebuffer. A
+ * small bounce buffer (a handful of lines) is copied from PSRAM in an ISR and
+ * fed to the panel from fast internal RAM, which removes the artifacts. Ten
+ * lines evenly divide the 480-line panel and fit comfortably in internal RAM.
+ */
+#define BOARD_LCD_BOUNCE_BUFFER_LINES 10
+
 static esp_lcd_panel_handle_t s_panel = NULL;
 static lv_display_t *s_display = NULL;
 
@@ -89,6 +100,7 @@ static esp_err_t display_panel_init(void)
         .hsync_gpio_num = BOARD_LCD_HSYNC_GPIO,
         .disp_gpio_num = BOARD_LCD_DISP_GPIO,
         .num_fbs = 2,
+        .bounce_buffer_size_px = BOARD_LCD_H_RES * BOARD_LCD_BOUNCE_BUFFER_LINES,
         .timings = s_panel_timing,
         .flags.fb_in_psram = 1,
     };
@@ -146,7 +158,7 @@ static esp_err_t display_lvgl_init(void)
     };
     const lvgl_port_display_rgb_cfg_t rgb_cfg = {
         .flags = {
-            .bb_mode = false,
+            .bb_mode = true,
             .avoid_tearing = true,
         },
     };
