@@ -2,29 +2,33 @@
  * Waveshare ESP32-S3-Touch-LCD-4 board bring-up implementation.
  *
  * Mirrors the reset sequence used by the official Waveshare esp32_s3_touch_lcd_4
- * BSP: configure the CH32V003 expander outputs, pulse the LCD and touch reset
- * lines low then high, and drive the backlight PWM to full brightness. The
- * expander shares the GT911 I2C bus (SDA/SCL from boards.h). Like the Waveshare
- * BSP and the vendor ioexpander example, this creates a single master bus once
- * and keeps it alive: the GT911 touch driver reuses the same handle through
+ * BSP: configure the expander outputs, pulse the LCD and touch reset lines low
+ * then high, and (on the CH32V003) drive the backlight PWM to full brightness.
+ * The board ships with one of two expanders, selected in Kconfig: the Waveshare
+ * CH32V003 (0x24) or a TCA9554 (0x20); their register addresses and direction
+ * polarity differ but the bring-up flow is the same. The expander shares the
+ * GT911 I2C bus (SDA/SCL from boards.h). Like the Waveshare BSP and the vendor
+ * ioexpander example, this creates a single master bus once and keeps it alive:
+ * the GT911 touch driver reuses the same handle through
  * waveshare_board_get_i2c_bus() instead of opening a second bus on the same I2C
  * port. Sharing one bus keeps the recovered bus state and avoids tearing the I2C
  * peripheral down and back up between the expander and the touch controller.
  *
  * The CH32V003 runs custom I2C-slave firmware that does not acknowledge the
  * zero-length transaction issued by i2c_master_probe(), so probing it reports
- * the device as absent even when it is present. Following the Waveshare BSP,
- * this code does not probe the expander: it adds the device and writes the
- * registers directly, and only warns (returning ESP_OK) if those writes fail so
- * that boards without the expander still boot.
+ * the device as absent even when it is present (a standard TCA9554 does ACK a
+ * probe, but this code takes the same no-probe path for both). Following the
+ * Waveshare BSP, this code does not probe the expander: it adds the device and
+ * writes the registers directly, and only warns (returning ESP_OK) if those
+ * writes fail so that boards without the expander still boot.
  *
- * Because the CH32V003 keeps running across an ESP32-S3 warm reset, it can leave
- * the shared I2C bus stuck (SDA held low) from an interrupted transaction. This
- * code bit-bangs a bus-recovery sequence before installing the I2C driver, lets
- * the bus settle, then retries the expander writes on the same persistent bus,
- * mirroring board_i2c_recover() plus the retry loop in the Waveshare
- * ESP32-S3-Touch-LCD-4 ioexpander example. If the expander still never answers,
- * a diagnostic address scan logs whatever does respond on the bus.
+ * Because the expander keeps running across an ESP32-S3 warm reset, it (or the
+ * GT911) can leave the shared I2C bus stuck (SDA held low) from an interrupted
+ * transaction. This code bit-bangs a bus-recovery sequence before installing the
+ * I2C driver, lets the bus settle, then retries the expander writes on the same
+ * persistent bus, mirroring board_i2c_recover() plus the retry loop in the
+ * Waveshare ESP32-S3-Touch-LCD-4 ioexpander example. If the expander still never
+ * answers, a diagnostic address scan logs whatever does respond on the bus.
  *
  * ASCII only. See AGENTS.md.
  */
@@ -150,9 +154,9 @@ static esp_err_t ws_write_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t 
 /*
  * Recover a stuck I2C bus before installing the master driver.
  *
- * The CH32V003 expander shares the ESP32-S3 power rail but has its own reset
- * domain, so a warm reset (reflash, EN button, software restart) can restart the
- * ESP32-S3 while the CH32V003 keeps running. If the CH32V003 (or the GT911) was
+ * The expander shares the ESP32-S3 power rail but has its own reset domain, so a
+ * warm reset (reflash, EN button, software restart) can restart the ESP32-S3
+ * while the expander keeps running. If the expander (or the GT911) was
  * mid-transaction it may still be holding SDA low, waiting for more clocks. The
  * new-master-bus driver then finds the bus stuck and every transaction NACKs
  * (ESP_ERR_INVALID_RESPONSE), which is exactly the observed failure. Bit-bang up
@@ -241,7 +245,7 @@ static esp_err_t ws_expander_reset_sequence(i2c_master_dev_handle_t dev)
 static esp_err_t ws_create_bus(void)
 {
     /*
-     * Clear a bus left stuck by the CH32V003 (or GT911) after a warm reset
+     * Clear a bus left stuck by the expander (or GT911) after a warm reset
      * before the I2C driver takes over, otherwise the first transaction NACKs.
      */
     ws_i2c_bus_recover();
@@ -287,9 +291,10 @@ static esp_err_t ws_try_expander(void)
      * Do not probe the expander first. The CH32V003 custom I2C-slave firmware
      * does not answer the zero-length transaction issued by i2c_master_probe(),
      * so a probe reports it as absent even when present (this is why the panel
-     * stayed dark and GT911 init failed). The Waveshare BSP skips the probe too
-     * and drives the registers directly; the register writes are the real
-     * presence test.
+     * stayed dark and GT911 init failed). A standard TCA9554 would ACK a probe,
+     * but this path skips it for both so the CH32V003 case is not misdetected.
+     * The Waveshare BSP skips the probe too and drives the registers directly;
+     * the register writes are the real presence test.
      */
     const i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
