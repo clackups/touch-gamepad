@@ -38,7 +38,19 @@ esp_err_t touchpad_init(void)
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &bus_handle), TAG, "i2c bus");
 
     esp_lcd_panel_io_handle_t io_handle = NULL;
-    const esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    esp_lcd_panel_io_i2c_config_t io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
+    /*
+     * The GT911 answers on its primary address (0x5D) or its backup address
+     * (0x14) depending on the INT/RST strapping at power-up. Probe both so the
+     * driver binds to whichever the board exposes.
+     */
+    if (i2c_master_probe(bus_handle, io_config.dev_addr, 1000) != ESP_OK) {
+        const uint32_t backup_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
+        if (i2c_master_probe(bus_handle, backup_addr, 1000) == ESP_OK) {
+            io_config.dev_addr = backup_addr;
+        }
+    }
+    ESP_LOGI(TAG, "GT911 I2C address 0x%02x", (unsigned)io_config.dev_addr);
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(bus_handle, &io_config, &io_handle), TAG, "touch io");
 
     const esp_lcd_touch_config_t touch_config = {

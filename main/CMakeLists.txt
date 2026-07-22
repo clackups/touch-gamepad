@@ -7,6 +7,7 @@ set(srcs
     "gamepad_backend.c"
     "ble_gamepad.c"
     "usb_gamepad.c"
+    "waveshare_board.c"
 )
 
 idf_component_register(

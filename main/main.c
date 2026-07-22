@@ -26,6 +26,7 @@
 #include "gamepad_backend.h"
 #include "touchpad.h"
 #include "ui.h"
+#include "waveshare_board.h"
 
 static const char *TAG = "app_main";
 
@@ -323,9 +324,14 @@ void app_main(void)
              s_preset->supports_usb ? "yes" : "no");
     touch_gamepad_log_configuration(&s_config);
 
+    ESP_ERROR_CHECK(waveshare_board_bringup());
     ESP_ERROR_CHECK(display_init(NULL));
     ESP_ERROR_CHECK(ui_init(&s_config, s_preset));
-    ESP_ERROR_CHECK(touchpad_init());
+    err = touchpad_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Touch init failed (%s); continuing without touch input",
+                 esp_err_to_name(err));
+    }
 
     err = gamepad_backend_start(s_config.transport_mode);
     if (err != ESP_OK) {
