@@ -110,9 +110,12 @@ All display and touch pins live in `main/boards.h`. The Guition values come from
 the community and ESPHome reference designs listed above. The Waveshare ESP32-S3-
 Touch-LCD-4 pins, timing and ST7701 init sequence come from the official
 Waveshare `esp32_s3_touch_lcd_4` BSP. That board routes the backlight and the
-LCD / touch reset lines through an on-board CH32V003 I/O expander (I2C address
-0x24); `waveshare_board_bringup()` releases those reset lines and enables the
-backlight before the display and touch controllers are initialized.
+LCD / touch reset lines through an on-board I/O expander on the GT911 I2C bus;
+`waveshare_board_bringup()` releases those reset lines and enables the backlight
+before the display and touch controllers are initialized. Board revisions ship
+with either the Waveshare CH32V003 (I2C address 0x24, default) or a TCA9554 (I2C
+address 0x20); select the populated part under
+`Touch Gamepad -> Waveshare I/O expander` in menuconfig.
 
 ## Persistence
 

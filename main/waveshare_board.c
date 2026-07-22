@@ -44,8 +44,58 @@ static const char *TAG = "waveshare_board";
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* CH32V003 I/O expander on the shared touch I2C bus. */
+/*
+ * I/O expander on the shared touch I2C bus. The Waveshare board ships in two
+ * revisions: one with the Waveshare CH32V003 (custom I2C-slave firmware, address
+ * 0x24, dedicated PWM backlight register) and one with a Texas Instruments
+ * TCA9554 (standard register map, address 0x20, no PWM). The expander is chosen
+ * in Kconfig; the two differ in I2C address, register addresses and direction
+ * polarity, so those are all resolved here.
+ *
+ * CH32V003 register map (Waveshare custom_io_expander_ch32v003 driver):
+ *   DIRECTION 0x02 (1 = output, power-up default 0xFF)
+ *   OUTPUT    0x03 (power-up default 0x00)
+ *   PWM       0x05 (0x00 = full brightness, value is inverted)
+ *
+ * TCA9554 register map (TI datasheet):
+ *   OUTPUT        0x01
+ *   POLARITY      0x02
+ *   CONFIGURATION 0x03 (1 = input, 0 = output, power-up default 0xFF)
+ * The TCA9554 has no PWM register, so the backlight is driven as a plain output.
+ */
+#if defined(CONFIG_TOUCH_GAMEPAD_WAVESHARE_EXPANDER_TCA9554)
+
+#define WS_EXPANDER_I2C_ADDR 0x20
+#define WS_EXPANDER_NAME "TCA9554"
+#define WS_REG_DIRECTION 0x03
+#define WS_REG_OUTPUT 0x01
+#define WS_REG_INPUT 0x00
+/*
+ * TCA9554 configuration register: a 1 bit selects an input, a 0 bit selects an
+ * output (the inverse of the CH32V003 direction register). To drive every pin as
+ * an output except RTC_INT, leave only the RTC_INT bit set in the direction
+ * write. WS_EXPANDER_HAS_PWM is 0 because the TCA9554 has no PWM register.
+ */
+#define WS_DIR_ALL_OUTPUTS_EXCEPT_RTC (WS_PIN_RTC_INT)
+#define WS_EXPANDER_HAS_PWM 0
+
+#else /* CONFIG_TOUCH_GAMEPAD_WAVESHARE_EXPANDER_CH32V003 */
+
 #define WS_EXPANDER_I2C_ADDR 0x24
+#define WS_EXPANDER_NAME "CH32V003"
+#define WS_REG_DIRECTION 0x02
+#define WS_REG_OUTPUT 0x03
+#define WS_REG_PWM 0x05
+#define WS_REG_INPUT 0x04
+/*
+ * CH32V003 direction register: a 1 bit selects an output. To drive every pin as
+ * an output except RTC_INT, set all bits except RTC_INT.
+ */
+#define WS_DIR_ALL_OUTPUTS_EXCEPT_RTC ((uint8_t)(0xFF & ~WS_PIN_RTC_INT))
+#define WS_EXPANDER_HAS_PWM 1
+
+#endif
+
 /*
  * Access the expander at 100 kHz rather than the vendor's 400 kHz. The expander
  * is only touched once at boot, so the lower clock costs nothing but gives the
@@ -69,15 +119,11 @@ static const char *TAG = "waveshare_board";
  */
 #define WS_EXPANDER_SETTLE_MS 150
 
-/* CH32V003 register map (from the Waveshare custom_io_expander_ch32v003 driver). */
-#define WS_REG_DIRECTION 0x02
-#define WS_REG_OUTPUT 0x03
-#define WS_REG_PWM 0x05
-
 /*
- * Expander pin bit masks (IO_EXPANDER_PIN_NUM_n == 1 << n). The direction
- * register uses 1 = output (dir_out_bit_zero = 0); all pins default to output
- * except RTC_INT, which is left as an input.
+ * Expander pin bit masks (IO_EXPANDER_PIN_NUM_n == 1 << n). These are identical
+ * for both expanders because the board wires the same expander pin to the same
+ * function; only the register addresses and direction polarity differ (resolved
+ * above). RTC_INT is left as an input; every other pin is driven as an output.
  */
 #define WS_PIN_TOUCH_RST (1 << 1)
 #define WS_PIN_LCD_RST (1 << 3)
@@ -162,13 +208,14 @@ static void ws_i2c_bus_recover(void)
 /*
  * Configure the expander outputs and release the LCD/touch reset lines: hold the
  * resets (and enables) low, wait, then drive them high, and finally set the
- * backlight PWM. Returns the first failing transaction's error so the caller can
- * retry the whole sequence.
+ * backlight (PWM on the CH32V003, nothing extra on the TCA9554 whose backlight,
+ * if wired to an output pin, is already driven by the release write). Returns the
+ * first failing transaction's error so the caller can retry the whole sequence.
  */
 static esp_err_t ws_expander_reset_sequence(i2c_master_dev_handle_t dev)
 {
-    /* Direction: every pin an output except RTC_INT. */
-    esp_err_t err = ws_write_reg(dev, WS_REG_DIRECTION, (uint8_t)(0xFF & ~WS_PIN_RTC_INT));
+    /* Direction: every pin an output except RTC_INT (polarity per expander). */
+    esp_err_t err = ws_write_reg(dev, WS_REG_DIRECTION, WS_DIR_ALL_OUTPUTS_EXCEPT_RTC);
     /* Drive LCD/touch resets (and enables) low, hold, then release high. */
     if (err == ESP_OK) {
         err = ws_write_reg(dev, WS_REG_OUTPUT, 0x00);
@@ -178,10 +225,12 @@ static esp_err_t ws_expander_reset_sequence(i2c_master_dev_handle_t dev)
         err = ws_write_reg(dev, WS_REG_OUTPUT,
                            WS_PIN_SYS_EN | WS_PIN_LCD_RST | WS_PIN_TOUCH_RST);
     }
+#if WS_EXPANDER_HAS_PWM
     if (err == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(200));
         err = ws_write_reg(dev, WS_REG_PWM, WS_PWM_FULL_BRIGHTNESS);
     }
+#endif
     return err;
 }
 
@@ -288,7 +337,7 @@ static void ws_i2c_scan(void)
         if (i2c_master_bus_add_device(s_i2c_bus, &dev_config, &dev_handle) != ESP_OK) {
             continue;
         }
-        const uint8_t reg = 0x04; /* CH32V003 INPUT_REG; harmless pointer set. */
+        const uint8_t reg = WS_REG_INPUT; /* Harmless input-reg pointer set. */
         if (i2c_master_transmit(dev_handle, &reg, sizeof(reg), 100) == ESP_OK) {
             ESP_LOGW(TAG, "  device ACK at 0x%02x", addr);
             ++found;
@@ -297,7 +346,7 @@ static void ws_i2c_scan(void)
     }
 
     if (found == 0) {
-        ESP_LOGW(TAG, "  no devices responded: check the CH32V003 power/wiring or power-cycle the board");
+        ESP_LOGW(TAG, "  no devices responded: check the " WS_EXPANDER_NAME " power/wiring or power-cycle the board");
     }
 }
 
@@ -313,12 +362,12 @@ esp_err_t waveshare_board_bringup(void)
      */
     if (ws_create_bus() != ESP_OK) {
         ESP_LOGW(TAG,
-                 "CH32V003 expander (0x%02x) unreachable (no I2C bus); continuing without reset release",
+                 WS_EXPANDER_NAME " expander (0x%02x) unreachable (no I2C bus); continuing without reset release",
                  WS_EXPANDER_I2C_ADDR);
         return ESP_OK;
     }
 
-    /* Let the recovered bus and a just-reset CH32V003 settle before the first write. */
+    /* Let the recovered bus and a just-reset expander settle before the first write. */
     vTaskDelay(pdMS_TO_TICKS(WS_EXPANDER_SETTLE_MS));
 
     esp_err_t err = ESP_FAIL;
@@ -334,11 +383,11 @@ esp_err_t waveshare_board_bringup(void)
 
     if (err != ESP_OK) {
         ESP_LOGW(TAG,
-                 "CH32V003 expander (0x%02x) unreachable (%s); continuing without reset release",
+                 WS_EXPANDER_NAME " expander (0x%02x) unreachable (%s); continuing without reset release",
                  WS_EXPANDER_I2C_ADDR, esp_err_to_name(err));
         ws_i2c_scan();
     } else {
-        ESP_LOGI(TAG, "CH32V003 released LCD/touch reset lines");
+        ESP_LOGI(TAG, WS_EXPANDER_NAME " released LCD/touch reset lines");
     }
 
     return ESP_OK;
