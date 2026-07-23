@@ -18,6 +18,7 @@
 #include "esp_bt_main.h"
 #include "esp_event.h"
 #include "esp_gap_ble_api.h"
+#include "esp_gatts_api.h"
 #include "esp_hidd.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -65,15 +66,54 @@ static esp_ble_gap_ext_adv_t s_ext_adv[BLE_GAMEPAD_ADV_SET_COUNT] = {
     { .instance = BLE_GAMEPAD_ADV_INSTANCE, .duration = 0, .max_events = 0 },
 };
 
+/*
+ * Kick off (or restart) advertising by re-running the full extended
+ * advertising configuration chain:
+ *   set_params -> ESP_GAP_BLE_EXT_ADV_SET_PARAMS_COMPLETE_EVT
+ *             -> config_ext_adv_data_raw -> ESP_GAP_BLE_EXT_ADV_DATA_SET_COMPLETE_EVT
+ *             -> ext_adv_start
+ * Always starting from set_params guarantees the controller has an advertising
+ * set registered for the instance before ext_adv_start is issued. Calling
+ * ext_adv_start (or ext_adv_stop) on an instance that was never registered
+ * makes the controller reject the HCI LE Set Extended Advertising Enable
+ * command with error 0x42 ("Unknown Advertising Identifier"), which is exactly
+ * what happened when re-pairing issued a bare stop/start pair.
+ */
+static esp_err_t ble_gamepad_start_advertising(void)
+{
+    esp_err_t err = esp_ble_gap_ext_adv_set_params(BLE_GAMEPAD_ADV_INSTANCE, &s_ext_adv_params);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ext_adv_set_params failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
 static void ble_gamepad_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
     case ESP_GAP_BLE_EXT_ADV_SET_PARAMS_COMPLETE_EVT:
+        if (param->ext_adv_set_params.status != ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGE(TAG, "Ext adv params set failed, status 0x%x",
+                     param->ext_adv_set_params.status);
+            break;
+        }
         esp_ble_gap_config_ext_adv_data_raw(BLE_GAMEPAD_ADV_INSTANCE, sizeof(s_ext_adv_raw_data),
                                             s_ext_adv_raw_data);
         break;
     case ESP_GAP_BLE_EXT_ADV_DATA_SET_COMPLETE_EVT:
+        if (param->ext_adv_data_set.status != ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGE(TAG, "Ext adv data set failed, status 0x%x",
+                     param->ext_adv_data_set.status);
+            break;
+        }
         esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
+        break;
+    case ESP_GAP_BLE_EXT_ADV_START_COMPLETE_EVT:
+        if (param->ext_adv_start.status != ESP_BT_STATUS_SUCCESS) {
+            ESP_LOGE(TAG, "Ext adv start failed, status 0x%x", param->ext_adv_start.status);
+        } else {
+            ESP_LOGI(TAG, "Advertising as \"Touch Gamepad\"");
+        }
         break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
@@ -97,7 +137,7 @@ static void ble_gamepad_hidd_event(void *handler_args, esp_event_base_t base, in
     switch (event) {
     case ESP_HIDD_START_EVENT:
         esp_ble_gap_set_device_name("Touch Gamepad");
-        esp_ble_gap_ext_adv_set_params(BLE_GAMEPAD_ADV_INSTANCE, &s_ext_adv_params);
+        ble_gamepad_start_advertising();
         break;
     case ESP_HIDD_CONNECT_EVENT:
         s_connected = true;
@@ -106,7 +146,7 @@ static void ble_gamepad_hidd_event(void *handler_args, esp_event_base_t base, in
     case ESP_HIDD_DISCONNECT_EVENT:
         s_connected = false;
         ESP_LOGI(TAG, "Host disconnected, advertising again");
-        esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
+        ble_gamepad_start_advertising();
         break;
     default:
         break;
@@ -166,6 +206,19 @@ esp_err_t ble_gamepad_start(void)
     }
 
     ble_gamepad_configure_security();
+
+    /*
+     * Route Bluedroid GATTS events to the esp_hid device layer. Without this
+     * callback the HID GATT service (report map, HID info, input reports) is
+     * never created, so a host can bond over GAP but never discovers a HID
+     * device: it "pairs but does nothing". This must be registered before
+     * esp_hidd_dev_init, which registers the GATTS applications whose
+     * ESP_GATTS_REG_EVT drives the attribute-table creation.
+     */
+    err = esp_ble_gatts_register_callback(esp_hidd_gatts_event_handler);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     static esp_hid_raw_report_map_t report_maps[1];
     report_maps[0].data = s_report_map;
@@ -256,7 +309,16 @@ esp_err_t ble_gamepad_restart_pairing(void)
 
     ESP_LOGI(TAG, "Clearing bonds and restarting advertising for re-pairing");
     ble_gamepad_remove_all_bonds();
-    uint8_t adv_instance = BLE_GAMEPAD_ADV_INSTANCE;
-    esp_ble_gap_ext_adv_stop(BLE_GAMEPAD_ADV_SET_COUNT, &adv_instance);
-    return esp_ble_gap_ext_adv_start(BLE_GAMEPAD_ADV_SET_COUNT, s_ext_adv);
+
+    /*
+     * Re-run the whole advertising configuration chain instead of a bare
+     * stop/start on the advertising handle. After a bond is dropped the
+     * controller may no longer hold the advertising set, and issuing the HCI
+     * enable command against an unknown handle fails with error 0x42
+     * ("Unknown Advertising Identifier"). Re-registering the set with
+     * esp_ble_gap_ext_adv_set_params first (which implicitly disables any
+     * ongoing advertising for the instance) always leaves a valid set for the
+     * subsequent ext_adv_start.
+     */
+    return ble_gamepad_start_advertising();
 }

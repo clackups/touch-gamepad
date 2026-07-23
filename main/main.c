@@ -42,16 +42,11 @@ typedef struct {
 } app_touch_tracker_t;
 
 static touch_gamepad_config_t s_config;
+static touch_gamepad_config_t s_draft;
+static touch_gamepad_config_t s_mapping_backup;
 static touch_gamepad_menu_state_t s_menu;
 static touch_gamepad_gesture_state_t s_gesture_state;
 static const touch_gamepad_board_preset_t *s_preset;
-static bool s_mapping_edit;
-
-/* Candidate joystick axis pairs cycled through by the mapping editor. */
-static const touch_gamepad_axis_binding_t s_axis_pairs[] = {
-    { 0, 1 }, { 2, 3 }, { 0, 2 }, { 1, 3 },
-};
-#define APP_AXIS_PAIR_COUNT (sizeof(s_axis_pairs) / sizeof(s_axis_pairs[0]))
 
 static int8_t app_scale_axis(int16_t delta, uint16_t span)
 {
@@ -116,123 +111,134 @@ static void app_switch_transport(void)
     ui_set_status(s_config.transport_mode, gamepad_backend_connected());
 }
 
-static void app_handle_menu_activation(void)
+static void app_close_menu(void)
 {
-    const touch_gamepad_menu_item_t item = s_menu.current_item;
-    touch_gamepad_transport_t previous_transport = s_config.transport_mode;
-    touch_gamepad_mapping_snapshot_t snapshot;
+    s_menu.open = false;
+    ui_hide_menu();
+}
 
-    esp_err_t err = touch_gamepad_menu_activate(&s_config, &s_menu, &snapshot);
+/* Persist the edited draft, apply live side effects and leave the menu. */
+static void app_menu_save(void)
+{
+    const touch_gamepad_transport_t previous_transport = s_config.transport_mode;
+
+    s_config = s_draft;
+    esp_err_t err = touch_gamepad_config_save(&s_config);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Menu activation failed: %s", esp_err_to_name(err));
-        return;
+        ESP_LOGW(TAG, "Config save failed: %s", esp_err_to_name(err));
     }
 
-    switch (item) {
-    case TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT:
-        if (s_config.transport_mode != previous_transport) {
-            app_switch_transport();
-        }
+    ui_set_theme(s_config.theme);
+    if (s_config.transport_mode != previous_transport) {
+        app_switch_transport();
+    }
+    touch_gamepad_log_configuration(&s_config);
+    app_close_menu();
+    ESP_LOGI(TAG, "Menu saved");
+}
+
+/* Drop the draft edits and leave the menu, restoring the previewed theme. */
+static void app_menu_cancel(void)
+{
+    ui_set_theme(s_config.theme);
+    app_close_menu();
+    ESP_LOGI(TAG, "Menu cancelled");
+}
+
+static void app_handle_menu_result(touch_gamepad_menu_result_t result)
+{
+    switch (result) {
+    case TOUCH_GAMEPAD_MENU_RESULT_THEME_CHANGED:
+        ui_set_theme(s_draft.theme);
+        ui_show_menu(&s_menu, &s_draft, s_preset);
         break;
-    case TOUCH_GAMEPAD_MENU_ITEM_REPAIR:
-        if (s_config.repair_requested) {
+    case TOUCH_GAMEPAD_MENU_RESULT_CHANGED:
+        ui_show_menu(&s_menu, &s_draft, s_preset);
+        break;
+    case TOUCH_GAMEPAD_MENU_RESULT_OPEN_MAPPING:
+        s_mapping_backup = s_draft;
+        s_menu.screen = TOUCH_GAMEPAD_MENU_SCREEN_MAPPING;
+        s_menu.selected = 0U;
+        ui_show_menu(&s_menu, &s_draft, s_preset);
+        break;
+    case TOUCH_GAMEPAD_MENU_RESULT_REPAIR:
+        if (s_draft.transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE) {
             gamepad_backend_restart_pairing();
-            s_config.repair_requested = false;
+        }
+        ui_show_menu(&s_menu, &s_draft, s_preset);
+        break;
+    case TOUCH_GAMEPAD_MENU_RESULT_SAVE:
+        if (s_menu.screen == TOUCH_GAMEPAD_MENU_SCREEN_MAPPING) {
+            /* Keep the mapping edits in the draft and return to the main menu. */
+            s_menu.screen = TOUCH_GAMEPAD_MENU_SCREEN_MAIN;
+            s_menu.selected = 0U;
+            ui_show_menu(&s_menu, &s_draft, s_preset);
+        } else {
+            app_menu_save();
         }
         break;
-    case TOUCH_GAMEPAD_MENU_ITEM_THEME:
-        ui_set_theme(s_config.theme);
+    case TOUCH_GAMEPAD_MENU_RESULT_CANCEL:
+        if (s_menu.screen == TOUCH_GAMEPAD_MENU_SCREEN_MAPPING) {
+            /* Discard the mapping edits made since entering the sub-menu. */
+            s_draft = s_mapping_backup;
+            s_menu.screen = TOUCH_GAMEPAD_MENU_SCREEN_MAIN;
+            s_menu.selected = 0U;
+            ui_show_menu(&s_menu, &s_draft, s_preset);
+        } else {
+            app_menu_cancel();
+        }
         break;
-    case TOUCH_GAMEPAD_MENU_ITEM_MAPPING:
-        s_mapping_edit = true;
-        touch_gamepad_log_configuration(&s_config);
-        ui_show_mapping(&s_config, s_preset);
-        return;
+    case TOUCH_GAMEPAD_MENU_RESULT_NONE:
     default:
         break;
-    }
-
-    ui_show_menu(&s_menu, &s_config, s_preset);
-}
-
-static void app_cycle_slide(uint8_t finger_count)
-{
-    const touch_gamepad_axis_binding_t *current =
-        (finger_count >= 2U) ? &s_config.two_finger_slide : &s_config.one_finger_slide;
-    size_t index = 0;
-
-    for (size_t i = 0; i < APP_AXIS_PAIR_COUNT; ++i) {
-        if (s_axis_pairs[i].axis_x == current->axis_x && s_axis_pairs[i].axis_y == current->axis_y) {
-            index = i;
-            break;
-        }
-    }
-
-    index = (index + 1U) % APP_AXIS_PAIR_COUNT;
-    touch_gamepad_set_slide_binding(&s_config,
-                                    (finger_count >= 2U) ? 2U : 1U,
-                                    s_axis_pairs[index].axis_x,
-                                    s_axis_pairs[index].axis_y);
-}
-
-static void app_handle_mapping_edit(const touch_gamepad_gesture_event_t *event)
-{
-    if (event->type == TOUCH_GAMEPAD_GESTURE_TAP) {
-        const uint8_t slot = (event->finger_count >= 2U) ? 1U : 0U;
-        const uint8_t index = (uint8_t)(event->tap_zone * 2U + slot);
-        if (index < TOUCH_GAMEPAD_TAP_BINDING_COUNT) {
-            const uint8_t count = touch_gamepad_button_count();
-            const uint8_t next = (uint8_t)((s_config.tap_buttons[index] + 1U) % count);
-            touch_gamepad_set_tap_binding(&s_config, index, next);
-            ui_show_mapping(&s_config, s_preset);
-        }
-    } else if (event->type == TOUCH_GAMEPAD_GESTURE_SLIDE) {
-        app_cycle_slide(event->finger_count);
-        ui_show_mapping(&s_config, s_preset);
     }
 }
 
 static void app_handle_gesture(const touch_gamepad_gesture_event_t *event)
 {
     if (event->type == TOUCH_GAMEPAD_GESTURE_OPEN_MENU) {
-        if (s_mapping_edit) {
-            s_mapping_edit = false;
-            ui_show_menu(&s_menu, &s_config, s_preset);
-            ESP_LOGI(TAG, "Mapping editor closed");
-        } else if (s_menu.open) {
-            s_menu.open = false;
-            ui_hide_menu();
-            ESP_LOGI(TAG, "Menu closed");
+        if (s_menu.open) {
+            /* The unlock sequence closes the menu, discarding any draft edits. */
+            app_menu_cancel();
         } else {
+            s_draft = s_config;
             touch_gamepad_menu_open(&s_menu);
-            ui_show_menu(&s_menu, &s_config, s_preset);
+            ui_show_menu(&s_menu, &s_draft, s_preset);
             ESP_LOGI(TAG, "Menu opened");
         }
         return;
     }
 
-    if (s_mapping_edit) {
-        app_handle_mapping_edit(event);
-        return;
-    }
-
     if (s_menu.open) {
         /*
-         * Menu navigation: a one-finger tap advances to the next item and a
-         * two-finger tap activates the current item.
+         * The configuration menu is driven by one-finger taps only. A tap on a
+         * row selects it: choice rows rotate their value depending on whether
+         * the left or right half of the row was tapped, action rows run their
+         * action. A one-finger slide scrolls tall menus.
          */
-        if (event->type == TOUCH_GAMEPAD_GESTURE_TAP) {
-            if (event->finger_count >= 2U) {
-                app_handle_menu_activation();
-            } else {
-                touch_gamepad_menu_next(&s_menu);
-                ui_show_menu(&s_menu, &s_config, s_preset);
+        if ((event->type == TOUCH_GAMEPAD_GESTURE_TAP) && (event->finger_count == 1U)) {
+            uint8_t row = 0;
+            int8_t direction = 0;
+            if (ui_menu_hit_test(event->tap_x, event->tap_y, &row, &direction)) {
+                const touch_gamepad_menu_result_t result =
+                    touch_gamepad_menu_tap_row(&s_menu, &s_draft, s_preset, row, direction);
+                app_handle_menu_result(result);
             }
+        } else if (event->type == TOUCH_GAMEPAD_GESTURE_SLIDE) {
+            ui_menu_scroll(event->delta_y);
         }
         return;
     }
 
     if (event->type == TOUCH_GAMEPAD_GESTURE_TAP) {
+        /*
+         * During gameplay only upper-half taps map to buttons; the gesture
+         * engine now also reports lower-half taps (so the full-screen menu can
+         * hit-test rows anywhere), so ignore them here.
+         */
+        if (!event->tap_upper_half) {
+            return;
+        }
         const uint8_t finger_slot = (event->finger_count >= 2U) ? 1U : 0U;
         const uint8_t binding_index = (uint8_t)(event->tap_zone * 2U + finger_slot);
         if (binding_index < TOUCH_GAMEPAD_TAP_BINDING_COUNT) {
