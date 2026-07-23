@@ -18,6 +18,7 @@
 #include "esp_bt_main.h"
 #include "esp_event.h"
 #include "esp_gap_ble_api.h"
+#include "esp_gatts_api.h"
 #include "esp_hidd.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -205,6 +206,19 @@ esp_err_t ble_gamepad_start(void)
     }
 
     ble_gamepad_configure_security();
+
+    /*
+     * Route Bluedroid GATTS events to the esp_hid device layer. Without this
+     * callback the HID GATT service (report map, HID info, input reports) is
+     * never created, so a host can bond over GAP but never discovers a HID
+     * device: it "pairs but does nothing". This must be registered before
+     * esp_hidd_dev_init, which registers the GATTS applications whose
+     * ESP_GATTS_REG_EVT drives the attribute-table creation.
+     */
+    err = esp_ble_gatts_register_callback(esp_hidd_gatts_event_handler);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     static esp_hid_raw_report_map_t report_maps[1];
     report_maps[0].data = s_report_map;
