@@ -13,6 +13,35 @@ choice TOUCH_GAMEPAD_BOARD
         bool "Waveshare ESP32-S3-Touch-LCD-4"
 endchoice
 
+choice TOUCH_GAMEPAD_WAVESHARE_EXPANDER
+    prompt "Waveshare I/O expander"
+    depends on TOUCH_GAMEPAD_BOARD_WAVESHARE
+    default TOUCH_GAMEPAD_WAVESHARE_EXPANDER_CH32V003
+    help
+        Select the I2C I/O expander populated on the Waveshare board that gates
+        the ST7701 LCD reset, the GT911 touch reset and the backlight. Board
+        revisions ship with either the Waveshare CH32V003 (address 0x24, custom
+        firmware, has a PWM backlight register) or a Texas Instruments TCA9554
+        (address 0x20, standard register map, backlight driven as a plain output).
+        If the panel stays dark and both the expander and the GT911 time out on
+        the I2C bus with the CH32V003 selected, try the TCA9554 option.
+
+    config TOUCH_GAMEPAD_WAVESHARE_EXPANDER_CH32V003
+        bool "CH32V003 (0x24)"
+
+    config TOUCH_GAMEPAD_WAVESHARE_EXPANDER_TCA9554
+        bool "TCA9554 (0x20)"
+endchoice
+
+config TOUCH_GAMEPAD_ENABLE_USB
+    bool "Compile the USB HID gamepad backend"
+    default y if TOUCH_GAMEPAD_BOARD_WAVESHARE
+    default n
+    help
+        Enable the TinyUSB HID gamepad backend. Only boards that expose a USB
+        device port (Waveshare ESP32-S3-Touch-LCD-4) can act as a USB gamepad.
+        The Guition ESP32-S3-4848S040 has no exposed USB port and stays BLE only.
+
 config TOUCH_GAMEPAD_SCREEN_WIDTH
     int "Display width"
     default 480

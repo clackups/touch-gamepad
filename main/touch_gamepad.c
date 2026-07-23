@@ -58,6 +58,7 @@ static const char *const s_button_labels[] = {
 
 #define TOUCH_GAMEPAD_BUTTON_LABEL_COUNT ((uint8_t)(sizeof(s_button_labels) / sizeof(s_button_labels[0])))
 
+#if CONFIG_TOUCH_GAMEPAD_BOARD_GUITION
 static const touch_gamepad_board_preset_t s_guition_preset = {
     .board_name = "Guition ESP32-S3-4848S040",
     .supports_usb = false,
@@ -65,7 +66,7 @@ static const touch_gamepad_board_preset_t s_guition_preset = {
     .screen_height = CONFIG_TOUCH_GAMEPAD_SCREEN_HEIGHT,
     .default_transport = TOUCH_GAMEPAD_TRANSPORT_BLE,
 };
-
+#else
 static const touch_gamepad_board_preset_t s_waveshare_preset = {
     .board_name = "Waveshare ESP32-S3-Touch-LCD-4",
     .supports_usb = true,
@@ -73,6 +74,7 @@ static const touch_gamepad_board_preset_t s_waveshare_preset = {
     .screen_height = CONFIG_TOUCH_GAMEPAD_SCREEN_HEIGHT,
     .default_transport = TOUCH_GAMEPAD_TRANSPORT_USB,
 };
+#endif
 
 static uint8_t touch_gamepad_identify_corner(const touch_gamepad_point_t *point, const touch_gamepad_board_preset_t *preset)
 {
@@ -246,6 +248,19 @@ const char *touch_gamepad_menu_item_name(touch_gamepad_menu_item_t item)
     default:
         return "Unknown";
     }
+}
+
+uint8_t touch_gamepad_button_count(void)
+{
+    return TOUCH_GAMEPAD_BUTTON_LABEL_COUNT;
+}
+
+const char *touch_gamepad_button_label(uint8_t button)
+{
+    if (button >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
+        return "?";
+    }
+    return s_button_labels[button];
 }
 
 void touch_gamepad_config_set_defaults(touch_gamepad_config_t *config)

@@ -1,77 +1,134 @@
 # touch-gamepad
 
-Touch Gamepad is an ESP-IDF 6.x project for ESP32-S3 touch displays that turns touchscreen gestures into gamepad input for a PC host.
+Touch Gamepad is an ESP-IDF 6.x firmware for ESP32-S3 touch displays that turns
+touchscreen gestures into gamepad input for a PC or console host. It renders a
+gesture surface with LVGL, reads a GT911 capacitive touch panel, and reports the
+resulting buttons and joystick axes over BLE HID or (on capable boards) USB HID.
 
-## Supported presets
+## Supported boards
 
-The repository now contains presets for these 480x480 boards:
+| Board | Display | Touch | Transports |
+| ----- | ------- | ----- | ---------- |
+| Guition ESP32-S3-4848S040 | 480x480 ST7701 RGB | GT911 | BLE only |
+| Waveshare ESP32-S3-Touch-LCD-4 (untested) | 480x480 ST7701 RGB | GT911 | BLE or USB |
+
+> **Warning: the Waveshare ESP32-S3-Touch-LCD-4 support is untested and
+> unreliable.** It has not been verified on real hardware, and even the official
+> Waveshare demos do not run correctly on the unit used for development, which
+> points to faulty hardware. Treat this board as experimental: the pin map,
+> bring-up sequence and transports may not work. The Guition ESP32-S3-4848S040 is
+> the supported, working target.
+
+The Guition ESP32-S3-4848S040 does not expose a USB device port, so it acts only
+as a BLE gamepad. The Waveshare ESP32-S3-Touch-LCD-4 is intended to act as either
+a BLE or a USB gamepad, with the active transport chosen from the configuration
+menu and persisted across reboots, but see the warning above about its untested
+state.
+
+Reference material for the two boards:
 
 - Guition ESP32-S3-4848S040
-  - BLE gamepad only
-  - No exposed USB port for HID mode
+  - https://www.guition.com/esp32-display-module/4-inch-esp32s3-display-module
+  - https://devices.esphome.io/devices/guition-esp32-s3-4848s040/
+  - https://github.com/agillis/esphome-modular-lvgl-buttons
 - Waveshare ESP32-S3-Touch-LCD-4
-  - BLE gamepad mode
-  - USB gamepad mode
+  - https://www.waveshare.com/esp32-s3-touch-lcd-4.htm
+  - https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4
 
 ## Gesture model
 
-The app models the touchscreen input exactly as described in the issue:
-
 - Upper half of the screen
-  - Split into four tap areas arranged as two rows and two columns
-  - Each area accepts one-finger taps and two-finger taps
-  - The default button map uses eight bindings, one per area and finger count
+  - Split into four tap zones arranged as two rows and two columns.
+  - Each zone accepts one-finger and two-finger taps, giving eight tap bindings
+    (four zones times two finger counts). Each binding maps to a gamepad button.
 - Lower half of the screen
-  - One-finger slides map to one joystick axis pair
-  - Two-finger slides map to a second joystick axis pair
+  - One-finger slides drive one joystick axis pair.
+  - Two-finger slides drive a second joystick axis pair.
+  - Slide distance is scaled to the signed axis range and re-centers when the
+    finger lifts.
 - Configuration menu unlock gesture
-  - Tap lower-left corner
-  - Tap upper-left corner
-  - Tap upper-right corner
-  - Tap lower-right corner
+  - Tap the corners in the order lower-left, upper-left, upper-right,
+    lower-right. Repeating the sequence closes the menu.
 
 ## Configuration menu
 
-The menu state machine exposes four items:
+Opening the menu shows four items. A one-finger tap on the upper half advances to
+the next item; a two-finger tap activates the current item.
 
 1. BLE/USB mode
-   - Waveshare can toggle between BLE and USB.
-   - Guition stays locked to BLE because the board does not expose USB for HID use.
+   - Waveshare toggles between BLE and USB and restarts the transport in place.
+   - Guition stays locked to BLE because the board has no USB device port.
 2. Start BLE pairing
-   - Marks the current bond for reset and requests a new pairing cycle.
+   - Removes the current BLE bond and restarts advertising so a new host can
+     pair. Only meaningful in BLE mode.
 3. Buttons and axes mapping
-   - Persists the full tap and slide mapping set in NVS.
-   - The current code exposes setter APIs for all eight tap bindings and for both slide axis pairs so a display UI can edit and persist them.
+   - Opens the mapping editor. Tap a zone to cycle its button binding (one- and
+     two-finger taps edit separate bindings), or slide in the lower half to cycle
+     that slide's joystick axis pair. Every change is written to NVS immediately.
+     Perform the unlock sequence to leave the editor.
 4. Color theme
-   - Blue on black
-   - Green on black
+   - Toggles between blue-on-black and green-on-black.
 
-## Build presets
+## Firmware architecture
 
-Use ESP-IDF 6.x and select the ESP32-S3 target before building.
+- `main/main.c` runs the boot sequence and the touch event loop: it polls the
+  touch controller, tracks a gesture from touch-down to touch-up, feeds the
+  completed frame to the gesture engine, and turns the result into gamepad
+  reports or menu actions.
+- `main/touch_gamepad.c` / `main/touch_gamepad.h` hold the board preset table,
+  the gesture-detection state machine, the menu state machine, and the NVS-backed
+  configuration.
+- `main/boards.h` centralizes the per-board display and touch pin assignments.
+- `main/display.c` brings up the ST7701 RGB panel and the LVGL port.
+- `main/touchpad.c` wraps the GT911 controller and returns up to two touch points.
+- `main/ui.c` builds the LVGL screen: the tap zones, the slide surface with a
+  live joystick marker, a status line, and the menu / mapping overlays.
+- `main/gamepad_hid.h` defines the shared HID report descriptor and report
+  struct used by both transports.
+- `main/gamepad_backend.c` caches the logical gamepad state and dispatches it to
+  the active transport.
+- `main/ble_gamepad.c` implements the BLE HID gamepad (Bluedroid + esp_hid).
+- `main/usb_gamepad.c` implements the USB HID gamepad (TinyUSB); it compiles to a
+  stub on boards without USB.
 
-### Guition preset
+## Building
+
+Use ESP-IDF 6.x. The managed component dependencies (LVGL, esp_lvgl_port, the
+ST7701 and GT911 drivers, and esp_tinyusb) are listed in
+`main/idf_component.yml` and fetched automatically.
+
+### Guition preset (BLE only)
 
 ```sh
 idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.guition" set-target esp32s3 build
 ```
 
-### Waveshare preset
+### Waveshare preset (BLE or USB)
 
 ```sh
 idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.waveshare" set-target esp32s3 build
 ```
 
-## Project layout
+CMake presets are also provided (`guition` and `waveshare`) that layer the shared
+`sdkconfig.defaults` with the matching board overlay.
 
-- `/Kconfig.projbuild` defines the board, transport, theme, and screen-size presets.
-- `/sdkconfig.defaults.guition` and `/sdkconfig.defaults.waveshare` select the board defaults.
-- `/main/touch_gamepad.c` contains the preset table, touch gesture detection, menu logic, and persistent mapping configuration.
-- `/main/main.c` initializes NVS, logs the selected preset, and exposes the gesture and menu contract to future board-specific HID and touchscreen drivers.
+## Hardware pin mapping
+
+All display and touch pins live in `main/boards.h`. The Guition values come from
+the community and ESPHome reference designs listed above. The Waveshare ESP32-S3-
+Touch-LCD-4 pins, timing and ST7701 init sequence come from the official
+Waveshare `esp32_s3_touch_lcd_4` BSP. That board routes the backlight and the
+LCD / touch reset lines through an on-board I/O expander on the GT911 I2C bus;
+`waveshare_board_bringup()` releases those reset lines and enables the backlight
+before the display and touch controllers are initialized. Board revisions ship
+with either the Waveshare CH32V003 (I2C address 0x24, default) or a TCA9554 (I2C
+address 0x20); select the populated part under
+`Touch Gamepad -> Waveshare I/O expander` in menuconfig.
 
 ## Persistence
 
-The runtime configuration is stored in NVS under the `touchgp` namespace. That persisted state includes:
+Runtime configuration is stored in NVS under the `touchgp` namespace and survives
+a reboot:
 
 - selected transport mode
 - selected color theme
@@ -81,8 +138,19 @@ The runtime configuration is stored in NVS under the `touchgp` namespace. That p
 
 ## ASCII-only rule
 
-Use ASCII characters only in source files. This applies to C, header, CMake, Kconfig, and documentation files that describe or configure the build.
+Every source and configuration file in this repository uses ASCII characters
+only. This applies to C, header, CMake, Kconfig, YAML, JSON, and Markdown files.
 
 ## Validation status
 
-This repository originally contained no source tree, build files, or tests. The current change adds the minimal ESP-IDF project skeleton and documents the exact preset and gesture behavior. If ESP-IDF tooling is available locally, the build commands above are the expected validation path.
+This firmware targets physical ESP32-S3 hardware and the ESP-IDF 6.x build
+system with the managed components above; it is intended to be built and flashed
+with the commands in the Building section. Because the panel and touch pin maps
+(especially for the Waveshare board) come from vendor references, confirm them on
+the target hardware before relying on a build.
+
+The Guition ESP32-S3-4848S040 preset is the validated target. The Waveshare
+ESP32-S3-Touch-LCD-4 preset is **untested and unreliable**: it has not been
+confirmed on hardware, and the reference unit fails to run even the official
+Waveshare demos (a likely hardware fault), so its bring-up and transports should
+be considered experimental.
