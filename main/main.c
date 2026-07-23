@@ -31,8 +31,7 @@
 static const char *TAG = "app_main";
 
 #define APP_POLL_INTERVAL_MS 20
-#define APP_BUTTON_HOLD_MS 60
-#define APP_SLIDE_RECENTER_MS 150
+#define APP_TAP_ZONE_COUNT 4
 
 typedef struct {
     bool active;
@@ -41,11 +40,25 @@ typedef struct {
     touch_gamepad_point_t last[TOUCHPAD_MAX_POINTS];
 } app_touch_tracker_t;
 
+/*
+ * Live gameplay input state. Buttons and the joystick are driven in real time:
+ * a zone is held for as long as a finger rests on it and the joystick tracks the
+ * finger continuously, so the HID report mirrors the actual touch state instead
+ * of firing only when the finger lifts.
+ */
+typedef struct {
+    bool zone_active[APP_TAP_ZONE_COUNT];
+    bool joystick_active;
+    int8_t axis_x;
+    int8_t axis_y;
+} app_live_state_t;
+
 static touch_gamepad_config_t s_config;
 static touch_gamepad_config_t s_draft;
 static touch_gamepad_config_t s_mapping_backup;
 static touch_gamepad_menu_state_t s_menu;
 static touch_gamepad_gesture_state_t s_gesture_state;
+static app_live_state_t s_live;
 static const touch_gamepad_board_preset_t *s_preset;
 
 static int8_t app_scale_axis(int16_t delta, uint16_t span)
@@ -63,34 +76,10 @@ static int8_t app_scale_axis(int16_t delta, uint16_t span)
     return (int8_t)value;
 }
 
-static void app_pulse_button(uint8_t button_index)
+/* Re-center the joystick axes and hide its indicator. */
+static void app_joystick_center(void)
 {
-    gamepad_backend_set_button(button_index, true);
-    gamepad_backend_send();
-    vTaskDelay(pdMS_TO_TICKS(APP_BUTTON_HOLD_MS));
-    gamepad_backend_set_button(button_index, false);
-    gamepad_backend_send();
-}
-
-static void app_apply_slide(const touch_gamepad_gesture_event_t *event)
-{
-    const touch_gamepad_axis_binding_t *binding =
-        (event->finger_count >= 2U) ? &s_config.two_finger_slide : &s_config.one_finger_slide;
-
-    const int8_t value_x = app_scale_axis(event->delta_x, s_preset->screen_width);
-    const int8_t value_y = app_scale_axis(event->delta_y, s_preset->screen_height);
-
-    if (binding->axis_x >= 0) {
-        gamepad_backend_set_axis((uint8_t)binding->axis_x, value_x);
-    }
-    if (binding->axis_y >= 0) {
-        gamepad_backend_set_axis((uint8_t)binding->axis_y, value_y);
-    }
-    gamepad_backend_send();
-
-    ui_show_slide(event->finger_count, event->delta_x, event->delta_y);
-
-    vTaskDelay(pdMS_TO_TICKS(APP_SLIDE_RECENTER_MS));
+    const touch_gamepad_axis_binding_t *binding = &s_config.one_finger_slide;
 
     if (binding->axis_x >= 0) {
         gamepad_backend_set_axis((uint8_t)binding->axis_x, 0);
@@ -98,7 +87,104 @@ static void app_apply_slide(const touch_gamepad_gesture_event_t *event)
     if (binding->axis_y >= 0) {
         gamepad_backend_set_axis((uint8_t)binding->axis_y, 0);
     }
-    gamepad_backend_send();
+    s_live.axis_x = 0;
+    s_live.axis_y = 0;
+    s_live.joystick_active = false;
+    ui_hide_joystick();
+}
+
+/* Release every held button and the joystick, transmitting once if needed. */
+static void app_gameplay_release_all(void)
+{
+    bool changed = false;
+
+    for (uint8_t zone = 0; zone < APP_TAP_ZONE_COUNT; ++zone) {
+        if (s_live.zone_active[zone]) {
+            s_live.zone_active[zone] = false;
+            gamepad_backend_set_button(s_config.tap_buttons[zone * 2U], false);
+            ui_set_zone_active(zone, false);
+            changed = true;
+        }
+    }
+
+    if (s_live.joystick_active) {
+        app_joystick_center();
+        changed = true;
+    }
+
+    if (changed) {
+        gamepad_backend_send();
+    }
+}
+
+/*
+ * Translate the current set of touch points into live button and joystick state
+ * (menu closed only). Upper-half fingers press their zone's button; the first
+ * lower-half finger drives the joystick with axes proportional to its distance
+ * from the fixed central point.
+ */
+static void app_gameplay_update(const touch_gamepad_point_t *points, uint8_t count)
+{
+    const int16_t width = (int16_t)s_preset->screen_width;
+    const int16_t height = (int16_t)s_preset->screen_height;
+    const int16_t half_height = (int16_t)(height / 2);
+
+    bool zone_now[APP_TAP_ZONE_COUNT] = { false, false, false, false };
+    bool have_joystick = false;
+    touch_gamepad_point_t joystick = { 0, 0 };
+
+    for (uint8_t i = 0; i < count; ++i) {
+        if (points[i].y < half_height) {
+            const uint8_t row = (points[i].y >= (int16_t)(height / 4)) ? 1U : 0U;
+            const uint8_t col = (points[i].x >= (int16_t)(width / 2)) ? 1U : 0U;
+            zone_now[(row * 2U) + col] = true;
+        } else if (!have_joystick) {
+            have_joystick = true;
+            joystick = points[i];
+        }
+    }
+
+    bool changed = false;
+
+    for (uint8_t zone = 0; zone < APP_TAP_ZONE_COUNT; ++zone) {
+        if (zone_now[zone] != s_live.zone_active[zone]) {
+            s_live.zone_active[zone] = zone_now[zone];
+            gamepad_backend_set_button(s_config.tap_buttons[zone * 2U], zone_now[zone]);
+            ui_set_zone_active(zone, zone_now[zone]);
+            changed = true;
+        }
+    }
+
+    if (have_joystick) {
+        const int16_t center_x = (int16_t)(width / 2);
+        const int16_t center_y = (int16_t)(half_height + (half_height / 2));
+        const int16_t delta_x = (int16_t)(joystick.x - center_x);
+        const int16_t delta_y = (int16_t)(joystick.y - center_y);
+        const int8_t value_x = app_scale_axis(delta_x, s_preset->screen_width);
+        const int8_t value_y = app_scale_axis(delta_y, (uint16_t)half_height);
+        const touch_gamepad_axis_binding_t *binding = &s_config.one_finger_slide;
+
+        if (!s_live.joystick_active || (value_x != s_live.axis_x) || (value_y != s_live.axis_y)) {
+            if (binding->axis_x >= 0) {
+                gamepad_backend_set_axis((uint8_t)binding->axis_x, value_x);
+            }
+            if (binding->axis_y >= 0) {
+                gamepad_backend_set_axis((uint8_t)binding->axis_y, value_y);
+            }
+            s_live.axis_x = value_x;
+            s_live.axis_y = value_y;
+            changed = true;
+        }
+        s_live.joystick_active = true;
+        ui_show_joystick(delta_x, delta_y);
+    } else if (s_live.joystick_active) {
+        app_joystick_center();
+        changed = true;
+    }
+
+    if (changed) {
+        gamepad_backend_send();
+    }
 }
 
 static void app_switch_transport(void)
@@ -201,6 +287,8 @@ static void app_handle_gesture(const touch_gamepad_gesture_event_t *event)
             /* The unlock sequence closes the menu, discarding any draft edits. */
             app_menu_cancel();
         } else {
+            /* Drop any held button/joystick input before entering the menu. */
+            app_gameplay_release_all();
             s_draft = s_config;
             touch_gamepad_menu_open(&s_menu);
             ui_show_menu(&s_menu, &s_draft, s_preset);
@@ -230,28 +318,11 @@ static void app_handle_gesture(const touch_gamepad_gesture_event_t *event)
         return;
     }
 
-    if (event->type == TOUCH_GAMEPAD_GESTURE_TAP) {
-        /*
-         * During gameplay only upper-half taps map to buttons; the gesture
-         * engine now also reports lower-half taps (so the full-screen menu can
-         * hit-test rows anywhere), so ignore them here.
-         */
-        if (!event->tap_upper_half) {
-            return;
-        }
-        const uint8_t finger_slot = (event->finger_count >= 2U) ? 1U : 0U;
-        const uint8_t binding_index = (uint8_t)(event->tap_zone * 2U + finger_slot);
-        if (binding_index < TOUCH_GAMEPAD_TAP_BINDING_COUNT) {
-            const uint8_t button = s_config.tap_buttons[binding_index];
-            ui_flash_tap(event->tap_zone, event->finger_count);
-            app_pulse_button(button);
-        }
-        return;
-    }
-
-    if (event->type == TOUCH_GAMEPAD_GESTURE_SLIDE) {
-        app_apply_slide(event);
-    }
+    /*
+     * During gameplay, buttons and the joystick are driven in real time by
+     * app_gameplay_update(); completed-gesture events other than the menu
+     * unlock sequence handled above are intentionally ignored here.
+     */
 }
 
 static void app_process_release(app_touch_tracker_t *tracker)
@@ -313,6 +384,16 @@ static void app_event_loop(void)
             ui_set_status(s_config.transport_mode, gamepad_backend_connected());
         }
 
+        /*
+         * Drive buttons and the joystick from the live touch state every poll so
+         * the HID report tracks press, hold and release in real time. When the
+         * menu is open, gameplay input is suspended (and already released on
+         * open).
+         */
+        if (!s_menu.open) {
+            app_gameplay_update(points, count);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(APP_POLL_INTERVAL_MS));
     }
 }
@@ -330,6 +411,7 @@ void app_main(void)
     ESP_ERROR_CHECK(touch_gamepad_config_load(&s_config));
     touch_gamepad_menu_init(&s_menu);
     memset(&s_gesture_state, 0, sizeof(s_gesture_state));
+    memset(&s_live, 0, sizeof(s_live));
 
     if (!s_preset->supports_usb && s_config.transport_mode == TOUCH_GAMEPAD_TRANSPORT_USB) {
         s_config.transport_mode = TOUCH_GAMEPAD_TRANSPORT_BLE;

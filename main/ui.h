@@ -27,11 +27,19 @@ void ui_set_theme(touch_gamepad_theme_t theme);
 /* Update the status line (active transport and host connection state). */
 void ui_set_status(touch_gamepad_transport_t transport, bool connected);
 
-/* Briefly highlight a tapped upper-half zone (0..3) for visual feedback. */
-void ui_flash_tap(uint8_t zone, uint8_t finger_count);
+/* Highlight (active=true) or clear (active=false) an upper-half tap zone (0..3)
+ * so the button reflects the current press state of the finger on it. */
+void ui_set_zone_active(uint8_t zone, bool active);
 
-/* Show the joystick indicator for a slide gesture. */
-void ui_show_slide(uint8_t finger_count, int16_t delta_x, int16_t delta_y);
+/*
+ * Show the lower-half joystick: draw the vector from the fixed central point to
+ * the current touch point. delta_x/delta_y are the touch offset from the center
+ * in screen pixels. Positive x is right, positive y is down.
+ */
+void ui_show_joystick(int16_t delta_x, int16_t delta_y);
+
+/* Return the joystick indicator to the central point (no active touch). */
+void ui_hide_joystick(void);
 
 /* Render the configuration menu overlay for the given menu/config state. Works
  * for both the main screen and the mapping sub-screen (chosen by menu->screen). */

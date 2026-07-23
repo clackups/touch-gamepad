@@ -29,9 +29,12 @@ emulate a BLE or USB gamepad.
 
 ## Implementation notes
 
-- Keep the upper half of the screen mapped to four tap zones.
-- Keep the lower half of the screen mapped to one-finger and two-finger slide
-  gestures.
+- Keep the upper half of the screen mapped to four tap zones. Touching a zone
+  presses its bound button and lifting the finger releases it (real-time hold),
+  and the zone lights up while held.
+- Keep the lower half of the screen mapped to an analog joystick: a fixed
+  central point, axes proportional to the finger's distance from the center, and
+  a drawn vector from the center to the touch point. Re-center on release.
 - Preserve the menu unlock sequence: lower-left, upper-left, upper-right,
   lower-right.
 - Drive the menu with one-finger taps only: tapping a choice row's left or right

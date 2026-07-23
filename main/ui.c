@@ -2,8 +2,9 @@
  * LVGL user interface implementation.
  *
  * The screen mirrors the gesture model: the upper half shows four tap zones in
- * a 2x2 grid, the lower half is a slide surface with a live joystick marker,
- * and a status line reports the transport and connection state. A modal overlay
+ * a 2x2 grid that light up while pressed, the lower half is an analog joystick
+ * that draws a central point and a vector to the current touch point, and a
+ * status line reports the transport and connection state. A modal overlay
  * renders the configuration menu.
  *
  * Every public function locks the LVGL port before touching widgets so it is
@@ -36,6 +37,9 @@ static lv_obj_t *s_zones[UI_TAP_ZONE_COUNT] = { NULL };
 static lv_obj_t *s_zone_labels[UI_TAP_ZONE_COUNT] = { NULL };
 static lv_obj_t *s_slide_area = NULL;
 static lv_obj_t *s_slide_marker = NULL;
+static lv_obj_t *s_slide_center = NULL;
+static lv_obj_t *s_slide_vector = NULL;
+static lv_point_precise_t s_vector_points[2];
 static lv_obj_t *s_menu_overlay = NULL;
 static lv_obj_t *s_menu_title = NULL;
 static lv_obj_t *s_menu_hint = NULL;
@@ -86,6 +90,9 @@ static void ui_apply_theme_locked(void)
     lv_obj_set_style_bg_color(s_slide_area, s_colors.background, 0);
     lv_obj_set_style_bg_opa(s_slide_area, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_slide_area, s_colors.foreground, 0);
+    lv_obj_set_style_line_color(s_slide_vector, s_colors.foreground, 0);
+    lv_obj_set_style_bg_color(s_slide_center, s_colors.foreground, 0);
+    lv_obj_set_style_bg_opa(s_slide_center, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s_slide_marker, s_colors.accent, 0);
     lv_obj_set_style_bg_opa(s_slide_marker, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_slide_marker, s_colors.foreground, 0);
@@ -141,6 +148,23 @@ esp_err_t ui_init(const touch_gamepad_config_t *config,
     lv_obj_set_style_radius(s_slide_area, 8, 0);
     lv_obj_clear_flag(s_slide_area, LV_OBJ_FLAG_SCROLLABLE);
 
+    /*
+     * The lower half acts as an analog joystick. Draw the vector from the fixed
+     * central point to the touch point first so the center dot and the moving
+     * marker render on top of it. The vector points array is stored statically
+     * because lv_line keeps a reference to it rather than copying.
+     */
+    s_slide_vector = lv_line_create(s_slide_area);
+    lv_obj_set_style_line_width(s_slide_vector, 4, 0);
+    lv_obj_set_style_line_rounded(s_slide_vector, true, 0);
+    lv_obj_add_flag(s_slide_vector, LV_OBJ_FLAG_HIDDEN);
+
+    s_slide_center = lv_obj_create(s_slide_area);
+    lv_obj_remove_style_all(s_slide_center);
+    lv_obj_set_size(s_slide_center, 14, 14);
+    lv_obj_set_style_radius(s_slide_center, LV_RADIUS_CIRCLE, 0);
+    lv_obj_center(s_slide_center);
+
     s_slide_marker = lv_obj_create(s_slide_area);
     lv_obj_remove_style_all(s_slide_marker);
     lv_obj_set_size(s_slide_marker, 40, 40);
@@ -149,7 +173,7 @@ esp_err_t ui_init(const touch_gamepad_config_t *config,
     lv_obj_center(s_slide_marker);
 
     s_status_label = lv_label_create(s_slide_area);
-    lv_label_set_text(s_status_label, "Slide area");
+    lv_label_set_text(s_status_label, "Joystick");
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     ui_apply_theme_locked();
@@ -181,7 +205,7 @@ void ui_set_status(touch_gamepad_transport_t transport, bool connected)
     display_unlock();
 }
 
-void ui_flash_tap(uint8_t zone, uint8_t finger_count)
+void ui_set_zone_active(uint8_t zone, bool active)
 {
     if (zone >= UI_TAP_ZONE_COUNT) {
         return;
@@ -189,30 +213,57 @@ void ui_flash_tap(uint8_t zone, uint8_t finger_count)
     if (!display_lock(-1)) {
         return;
     }
-    lv_obj_set_style_bg_color(s_zones[zone], s_colors.accent, 0);
-    lv_label_set_text_fmt(s_zone_labels[zone], "Zone %d\n%d-finger", zone + 1, finger_count);
+    lv_obj_set_style_bg_color(s_zones[zone], active ? s_colors.accent : s_colors.background, 0);
+    lv_label_set_text_fmt(s_zone_labels[zone], "Zone %d%s", zone + 1, active ? "\nPRESS" : "");
     display_unlock();
 }
 
-void ui_show_slide(uint8_t finger_count, int16_t delta_x, int16_t delta_y)
+void ui_show_joystick(int16_t delta_x, int16_t delta_y)
 {
     if (!display_lock(-1)) {
         return;
     }
-    int32_t offset_x = delta_x / 2;
-    int32_t offset_y = delta_y / 2;
-    if (offset_x > 100) {
-        offset_x = 100;
-    } else if (offset_x < -100) {
-        offset_x = -100;
+
+    const int32_t content_w = lv_obj_get_content_width(s_slide_area);
+    const int32_t content_h = lv_obj_get_content_height(s_slide_area);
+    const int32_t marker_half = 20; /* half the 40px marker */
+    const int32_t max_x = (content_w / 2) - marker_half;
+    const int32_t max_y = (content_h / 2) - marker_half;
+
+    int32_t offset_x = delta_x;
+    int32_t offset_y = delta_y;
+    if (offset_x > max_x) {
+        offset_x = max_x;
+    } else if (offset_x < -max_x) {
+        offset_x = -max_x;
     }
-    if (offset_y > 60) {
-        offset_y = 60;
-    } else if (offset_y < -60) {
-        offset_y = -60;
+    if (offset_y > max_y) {
+        offset_y = max_y;
+    } else if (offset_y < -max_y) {
+        offset_y = -max_y;
     }
+
     lv_obj_align(s_slide_marker, LV_ALIGN_CENTER, offset_x, offset_y);
-    lv_label_set_text_fmt(s_status_label, "%d-finger slide", finger_count);
+
+    const int32_t center_x = content_w / 2;
+    const int32_t center_y = content_h / 2;
+    s_vector_points[0].x = center_x;
+    s_vector_points[0].y = center_y;
+    s_vector_points[1].x = center_x + offset_x;
+    s_vector_points[1].y = center_y + offset_y;
+    lv_line_set_points(s_slide_vector, s_vector_points, 2);
+    lv_obj_clear_flag(s_slide_vector, LV_OBJ_FLAG_HIDDEN);
+
+    display_unlock();
+}
+
+void ui_hide_joystick(void)
+{
+    if (!display_lock(-1)) {
+        return;
+    }
+    lv_obj_align(s_slide_marker, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(s_slide_vector, LV_OBJ_FLAG_HIDDEN);
     display_unlock();
 }
 

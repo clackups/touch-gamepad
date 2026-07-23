@@ -39,13 +39,16 @@ Reference material for the two boards:
 
 - Upper half of the screen
   - Split into four tap zones arranged as two rows and two columns.
-  - Each zone accepts one-finger and two-finger taps, giving eight tap bindings
-    (four zones times two finger counts). Each binding maps to a gamepad button.
+  - Touching a zone presses the gamepad button bound to that zone and lifting the
+    finger releases it, so the button is held for exactly as long as the finger
+    rests on the zone. The zone lights up while it is held.
 - Lower half of the screen
-  - One-finger slides drive one joystick axis pair.
-  - Two-finger slides drive a second joystick axis pair.
-  - Slide distance is scaled to the signed axis range and re-centers when the
+  - Acts as an analog joystick with a fixed central point. Sliding the finger
+    away from the center drives a joystick axis pair whose values are
+    proportional to the distance from the center, and the axes re-center when the
     finger lifts.
+  - The screen draws the central point and a vector pointing from it to the
+    current touch point.
 - Configuration menu unlock gesture
   - Tap the corners in the order lower-left, upper-left, upper-right,
     lower-right. Repeating the sequence closes the menu (discarding unsaved
@@ -97,17 +100,18 @@ Mapping sub-menu rows:
 ## Firmware architecture
 
 - `main/main.c` runs the boot sequence and the touch event loop: it polls the
-  touch controller, tracks a gesture from touch-down to touch-up, feeds the
-  completed frame to the gesture engine, and turns the result into gamepad
-  reports or menu actions.
+  touch controller, drives the buttons and the joystick from the live touch
+  state every poll (press, hold and release in real time), and still tracks
+  corner taps to detect the menu unlock sequence and to drive the menu.
 - `main/touch_gamepad.c` / `main/touch_gamepad.h` hold the board preset table,
   the gesture-detection state machine, the menu state machine, and the NVS-backed
   configuration.
 - `main/boards.h` centralizes the per-board display and touch pin assignments.
 - `main/display.c` brings up the ST7701 RGB panel and the LVGL port.
 - `main/touchpad.c` wraps the GT911 controller and returns up to two touch points.
-- `main/ui.c` builds the LVGL screen: the tap zones, the slide surface with a
-  live joystick marker, a status line, and the menu / mapping overlays.
+- `main/ui.c` builds the LVGL screen: the tap zones that light up while pressed,
+  the lower-half joystick surface with a central point and a live vector to the
+  touch point, a status line, and the menu / mapping overlays.
 - `main/gamepad_hid.h` defines the shared HID report descriptor and report
   struct used by both transports.
 - `main/gamepad_backend.c` caches the logical gamepad state and dispatches it to
