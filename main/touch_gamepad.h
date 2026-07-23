@@ -117,7 +117,10 @@ typedef struct {
 typedef struct {
     touch_gamepad_gesture_type_t type;
     uint8_t finger_count;
-    uint8_t tap_zone;
+    uint8_t tap_zone;      /* upper-half zone 0..3, valid only when tap_upper_half */
+    bool tap_upper_half;   /* true when the tap started in the upper half */
+    int16_t tap_x;         /* raw x of the tap (first finger), screen pixels */
+    int16_t tap_y;         /* raw y of the tap (first finger), screen pixels */
     int16_t delta_x;
     int16_t delta_y;
 } touch_gamepad_gesture_event_t;

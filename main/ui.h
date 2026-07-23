@@ -33,17 +33,21 @@ void ui_flash_tap(uint8_t zone, uint8_t finger_count);
 /* Show the joystick indicator for a slide gesture. */
 void ui_show_slide(uint8_t finger_count, int16_t delta_x, int16_t delta_y);
 
-/* Render the configuration menu overlay for the given menu/config state. */
+/* Render the configuration menu overlay for the given menu/config state. Works
+ * for both the main screen and the mapping sub-screen (chosen by menu->screen). */
 void ui_show_menu(const touch_gamepad_menu_state_t *menu,
                   const touch_gamepad_config_t *config,
                   const touch_gamepad_board_preset_t *preset);
 
 /*
- * Render the interactive mapping editor overlay, listing every tap-to-button
- * binding and both slide axis pairs.
+ * Map a raw touch point (screen pixels) to a menu row. Returns true and fills
+ * out_row with the logical row index and out_direction with -1 (tap on the left
+ * half of the row) or +1 (right half) when the point lands on a visible row.
  */
-void ui_show_mapping(const touch_gamepad_config_t *config,
-                     const touch_gamepad_board_preset_t *preset);
+bool ui_menu_hit_test(int16_t x, int16_t y, uint8_t *out_row, int8_t *out_direction);
+
+/* Scroll the menu list vertically by delta_y pixels (for tall menus). */
+void ui_menu_scroll(int16_t delta_y);
 
 /* Hide the configuration menu overlay and return to the gameplay view. */
 void ui_hide_menu(void);

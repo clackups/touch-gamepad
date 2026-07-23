@@ -34,8 +34,13 @@ emulate a BLE or USB gamepad.
   gestures.
 - Preserve the menu unlock sequence: lower-left, upper-left, upper-right,
   lower-right.
-- Keep the menu items limited to transport mode, BLE pairing reset, mapping, and
-  theme selection unless requirements change.
+- Drive the menu with one-finger taps only: tapping a choice row's left or right
+  half rotates its value, tapping an action row runs it. Keep the main menu rows
+  limited to transport mode, theme selection, mapping, BLE pairing reset, and the
+  Save/Cancel actions unless requirements change. Menu edits apply to a draft
+  copy and are only persisted to NVS on Save.
+- Allow the menu list to scroll (one-finger slide) when it is taller than the
+  screen so every row remains reachable.
 - Store runtime configuration in NVS so gesture mappings and theme changes
   survive a reboot.
 - Both boards use a 480x480 ST7701 RGB panel and a GT911 touch controller; keep

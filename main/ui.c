@@ -23,7 +23,6 @@
 static const char *TAG = "ui";
 
 #define UI_TAP_ZONE_COUNT 4
-#define UI_AXIS_INDEX_MASK 0x3
 
 typedef struct {
     lv_color_t background;
@@ -38,7 +37,15 @@ static lv_obj_t *s_zone_labels[UI_TAP_ZONE_COUNT] = { NULL };
 static lv_obj_t *s_slide_area = NULL;
 static lv_obj_t *s_slide_marker = NULL;
 static lv_obj_t *s_menu_overlay = NULL;
+static lv_obj_t *s_menu_title = NULL;
+static lv_obj_t *s_menu_hint = NULL;
 static lv_obj_t *s_menu_list = NULL;
+static lv_obj_t *s_menu_rows[TOUCH_GAMEPAD_MENU_MAX_ROWS] = { NULL };
+static uint8_t s_menu_row_count = 0;
+
+/* Height in pixels of a single menu row. Roughly twice the previous single-line
+ * item height so each row is a comfortable one-finger touch target. */
+#define UI_MENU_ROW_HEIGHT 48
 
 static ui_theme_colors_t s_colors;
 
@@ -209,133 +216,149 @@ void ui_show_slide(uint8_t finger_count, int16_t delta_x, int16_t delta_y)
     display_unlock();
 }
 
-static void ui_menu_value(const touch_gamepad_menu_item_t item,
-                          const touch_gamepad_config_t *config,
-                          const touch_gamepad_board_preset_t *preset,
-                          char *out,
-                          size_t out_len)
+static void ui_menu_create_overlay_locked(const touch_gamepad_board_preset_t *preset)
 {
-    switch (item) {
-    case TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT:
-        snprintf(out, out_len, "%s%s",
-                 config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_USB ? "USB" : "BLE",
-                 preset->supports_usb ? "" : " (fixed)");
-        break;
-    case TOUCH_GAMEPAD_MENU_ITEM_REPAIR:
-        snprintf(out, out_len, "%s",
-                 config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE ? "tap to re-pair" : "BLE only");
-        break;
-    case TOUCH_GAMEPAD_MENU_ITEM_MAPPING:
-        snprintf(out, out_len, "8 taps / 2 slides");
-        break;
-    case TOUCH_GAMEPAD_MENU_ITEM_THEME:
-        snprintf(out, out_len, "%s",
-                 config->theme == TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK ? "green" : "blue");
-        break;
-    default:
-        out[0] = '\0';
-        break;
-    }
+    s_menu_overlay = lv_obj_create(s_screen);
+    lv_obj_remove_style_all(s_menu_overlay);
+    lv_obj_set_size(s_menu_overlay, preset->screen_width - 20, preset->screen_height - 20);
+    lv_obj_center(s_menu_overlay);
+    lv_obj_set_style_border_width(s_menu_overlay, 3, 0);
+    lv_obj_set_style_radius(s_menu_overlay, 12, 0);
+    lv_obj_set_style_pad_all(s_menu_overlay, 10, 0);
+    lv_obj_set_flex_flow(s_menu_overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(s_menu_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_menu_title = lv_label_create(s_menu_overlay);
+    lv_label_set_text(s_menu_title, "Configuration");
+
+    s_menu_hint = lv_label_create(s_menu_overlay);
+    lv_label_set_text(s_menu_hint,
+                      "Tap a row. Tap left/right to change a value.\n"
+                      "Slide up/down to scroll.");
+
+    s_menu_list = lv_obj_create(s_menu_overlay);
+    lv_obj_remove_style_all(s_menu_list);
+    lv_obj_set_width(s_menu_list, LV_PCT(100));
+    lv_obj_set_flex_grow(s_menu_list, 1);
+    lv_obj_set_flex_flow(s_menu_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_menu_list, 4, 0);
+    lv_obj_set_scroll_dir(s_menu_list, LV_DIR_VER);
 }
 
 void ui_show_menu(const touch_gamepad_menu_state_t *menu,
                   const touch_gamepad_config_t *config,
                   const touch_gamepad_board_preset_t *preset)
 {
+    touch_gamepad_menu_view_t view;
+
     if (!display_lock(-1)) {
         return;
     }
 
+    touch_gamepad_menu_build_view(menu, config, preset, &view);
+
     if (s_menu_overlay == NULL) {
-        s_menu_overlay = lv_obj_create(s_screen);
-        lv_obj_remove_style_all(s_menu_overlay);
-        lv_obj_set_size(s_menu_overlay, preset->screen_width - 40, preset->screen_height - 40);
-        lv_obj_center(s_menu_overlay);
-        lv_obj_set_style_border_width(s_menu_overlay, 3, 0);
-        lv_obj_set_style_radius(s_menu_overlay, 12, 0);
-        lv_obj_set_style_pad_all(s_menu_overlay, 12, 0);
-        lv_obj_set_flex_flow(s_menu_overlay, LV_FLEX_FLOW_COLUMN);
-
-        lv_obj_t *title = lv_label_create(s_menu_overlay);
-        lv_label_set_text(title, "Configuration");
-        lv_obj_set_style_text_color(title, s_colors.foreground, 0);
-
-        s_menu_list = lv_obj_create(s_menu_overlay);
-        lv_obj_remove_style_all(s_menu_list);
-        lv_obj_set_width(s_menu_list, LV_PCT(100));
-        lv_obj_set_flex_grow(s_menu_list, 1);
-        lv_obj_set_flex_flow(s_menu_list, LV_FLEX_FLOW_COLUMN);
+        ui_menu_create_overlay_locked(preset);
     }
 
     lv_obj_set_style_bg_color(s_menu_overlay, s_colors.background, 0);
     lv_obj_set_style_bg_opa(s_menu_overlay, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_menu_overlay, s_colors.foreground, 0);
+    lv_label_set_text(s_menu_title, view.title);
+    lv_obj_set_style_text_color(s_menu_title, s_colors.foreground, 0);
+    lv_obj_set_style_text_color(s_menu_hint, s_colors.foreground, 0);
+
     lv_obj_clean(s_menu_list);
+    s_menu_row_count = 0;
 
-    for (int i = 0; i < TOUCH_GAMEPAD_MENU_ITEM_COUNT; ++i) {
-        char value[32];
-        ui_menu_value((touch_gamepad_menu_item_t)i, config, preset, value, sizeof(value));
+    for (uint8_t i = 0; i < view.count && i < TOUCH_GAMEPAD_MENU_MAX_ROWS; ++i) {
+        const touch_gamepad_menu_row_t *row = &view.rows[i];
+        const bool selected = (i == view.selected);
+        char text[80];
 
-        lv_obj_t *row = lv_label_create(s_menu_list);
-        const bool selected = (i == (int)menu->current_item);
-        lv_label_set_text_fmt(row, "%s %s: %s",
-                              selected ? ">" : " ",
-                              touch_gamepad_menu_item_name((touch_gamepad_menu_item_t)i),
-                              value);
-        lv_obj_set_style_text_color(row, selected ? s_colors.accent : s_colors.foreground, 0);
+        if (row->kind == TOUCH_GAMEPAD_MENU_ROW_CHOICE) {
+            snprintf(text, sizeof(text), "%s:  < %s >", row->label, row->value);
+        } else if (row->value[0] != '\0') {
+            snprintf(text, sizeof(text), "%s:  %s", row->label, row->value);
+        } else {
+            snprintf(text, sizeof(text), "%s", row->label);
+        }
+
+        lv_obj_t *item = lv_obj_create(s_menu_list);
+        lv_obj_remove_style_all(item);
+        lv_obj_set_width(item, LV_PCT(100));
+        lv_obj_set_height(item, UI_MENU_ROW_HEIGHT);
+        lv_obj_set_style_radius(item, 6, 0);
+        lv_obj_set_style_bg_color(item, selected ? s_colors.accent : s_colors.background, 0);
+        lv_obj_set_style_bg_opa(item, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *label = lv_label_create(item);
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_color(label, s_colors.foreground, 0);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+
+        s_menu_rows[i] = item;
+        s_menu_row_count = (uint8_t)(i + 1U);
+    }
+
+    if (view.selected < s_menu_row_count) {
+        lv_obj_scroll_to_view(s_menu_rows[view.selected], LV_ANIM_OFF);
     }
 
     lv_obj_clear_flag(s_menu_overlay, LV_OBJ_FLAG_HIDDEN);
     display_unlock();
 }
 
-void ui_show_mapping(const touch_gamepad_config_t *config,
-                     const touch_gamepad_board_preset_t *preset)
+bool ui_menu_hit_test(int16_t x, int16_t y, uint8_t *out_row, int8_t *out_direction)
 {
-    static const char *const axis_names[] = { "X", "Y", "Z", "Rz" };
+    bool hit = false;
 
+    if ((s_menu_overlay == NULL) || (s_menu_row_count == 0U)) {
+        return false;
+    }
+    if (!display_lock(-1)) {
+        return false;
+    }
+
+    lv_area_t list_area;
+    lv_obj_get_coords(s_menu_list, &list_area);
+
+    for (uint8_t i = 0; i < s_menu_row_count; ++i) {
+        lv_area_t area;
+
+        if (s_menu_rows[i] == NULL) {
+            continue;
+        }
+        lv_obj_get_coords(s_menu_rows[i], &area);
+
+        /* Only accept taps that land inside the visible list viewport so rows
+         * scrolled out of view are not selected. */
+        if ((y < list_area.y1) || (y > list_area.y2)) {
+            continue;
+        }
+        if ((x >= area.x1) && (x <= area.x2) && (y >= area.y1) && (y <= area.y2)) {
+            const int32_t mid = (area.x1 + area.x2) / 2;
+            *out_row = i;
+            *out_direction = (x < mid) ? (int8_t)-1 : (int8_t)1;
+            hit = true;
+            break;
+        }
+    }
+
+    display_unlock();
+    return hit;
+}
+
+void ui_menu_scroll(int16_t delta_y)
+{
+    if (s_menu_list == NULL) {
+        return;
+    }
     if (!display_lock(-1)) {
         return;
     }
-
-    if (s_menu_overlay == NULL || s_menu_list == NULL) {
-        display_unlock();
-        return;
-    }
-
-    lv_obj_clean(s_menu_list);
-
-    lv_obj_t *hint = lv_label_create(s_menu_list);
-    lv_label_set_text(hint,
-                      "Tap a zone to cycle its button.\n"
-                      "Slide to cycle joystick axes.\n"
-                      "Unlock sequence exits.");
-    lv_obj_set_style_text_color(hint, s_colors.foreground, 0);
-
-    for (int i = 0; i < TOUCH_GAMEPAD_TAP_BINDING_COUNT; ++i) {
-        const int zone = i / 2;
-        const int fingers = (i % 2) + 1;
-        lv_obj_t *row = lv_label_create(s_menu_list);
-        lv_label_set_text_fmt(row, "Zone %d %d-finger: %s",
-                              zone + 1, fingers,
-                              touch_gamepad_button_label(config->tap_buttons[i]));
-        lv_obj_set_style_text_color(row, s_colors.foreground, 0);
-    }
-
-    lv_obj_t *slide1 = lv_label_create(s_menu_list);
-    lv_label_set_text_fmt(slide1, "1-finger slide: %s/%s",
-                          axis_names[config->one_finger_slide.axis_x & UI_AXIS_INDEX_MASK],
-                          axis_names[config->one_finger_slide.axis_y & UI_AXIS_INDEX_MASK]);
-    lv_obj_set_style_text_color(slide1, s_colors.foreground, 0);
-
-    lv_obj_t *slide2 = lv_label_create(s_menu_list);
-    lv_label_set_text_fmt(slide2, "2-finger slide: %s/%s",
-                          axis_names[config->two_finger_slide.axis_x & UI_AXIS_INDEX_MASK],
-                          axis_names[config->two_finger_slide.axis_y & UI_AXIS_INDEX_MASK]);
-    lv_obj_set_style_text_color(slide2, s_colors.foreground, 0);
-
-    (void)preset;
-    lv_obj_clear_flag(s_menu_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_scroll_by(s_menu_list, 0, delta_y, LV_ANIM_OFF);
     display_unlock();
 }
 

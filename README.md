@@ -48,26 +48,51 @@ Reference material for the two boards:
     finger lifts.
 - Configuration menu unlock gesture
   - Tap the corners in the order lower-left, upper-left, upper-right,
-    lower-right. Repeating the sequence closes the menu.
+    lower-right. Repeating the sequence closes the menu (discarding unsaved
+    edits, like Cancel).
 
 ## Configuration menu
 
-Opening the menu shows four items. A one-finger tap on the upper half advances to
-the next item; a two-finger tap activates the current item.
+The menu is a full-screen, scrollable list driven entirely by one-finger taps.
+Each row is a large touch target. Tap a row to select it:
 
-1. BLE/USB mode
-   - Waveshare toggles between BLE and USB and restarts the transport in place.
+- On a multiple-choice row, tap the left half of the row to rotate to the
+  previous value or the right half to rotate to the next value. The current
+  value is shown between `<` and `>` arrows as a reminder.
+- On an action row (Buttons and axes, BLE pairing reset, Save, Cancel), a tap
+  runs the action.
+
+If the list is taller than the screen, a one-finger slide up or down scrolls it
+so every row (including Save and Cancel at the bottom) can be reached. Edits are
+made on a working copy and only written to NVS when you tap **Save**; **Cancel**
+(or the unlock sequence) leaves the menu without saving.
+
+Main screen rows:
+
+1. Transport (BLE/USB)
+   - Waveshare rotates between BLE and USB; the transport is restarted when the
+     edits are saved.
    - Guition stays locked to BLE because the board has no USB device port.
-2. Start BLE pairing
+2. Color theme
+   - Rotates between blue-on-black and green-on-black. The change is previewed
+     live and persisted on Save.
+3. Buttons and axes
+   - Opens the mapping sub-menu (see below).
+4. BLE pairing reset
    - Removes the current BLE bond and restarts advertising so a new host can
-     pair. Only meaningful in BLE mode.
-3. Buttons and axes mapping
-   - Opens the mapping editor. Tap a zone to cycle its button binding (one- and
-     two-finger taps edit separate bindings), or slide in the lower half to cycle
-     that slide's joystick axis pair. Every change is written to NVS immediately.
-     Perform the unlock sequence to leave the editor.
-4. Color theme
-   - Toggles between blue-on-black and green-on-black.
+     pair. Only meaningful in BLE mode; the action runs immediately.
+5. Save / Cancel
+   - Save writes every edit to NVS and closes the menu. Cancel discards the
+     edits and closes the menu.
+
+Mapping sub-menu rows:
+
+- Eight `Zone N M-finger` choice rows, each rotating through the gamepad button
+  bound to that tap (one- and two-finger taps edit separate bindings).
+- `1-finger slide` and `2-finger slide` choice rows, each rotating that slide's
+  joystick axis pair.
+- Save returns to the main menu keeping the mapping edits; Cancel returns to the
+  main menu discarding the mapping edits made in the sub-menu.
 
 ## Firmware architecture
 

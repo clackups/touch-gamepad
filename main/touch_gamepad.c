@@ -234,20 +234,41 @@ const char *touch_gamepad_theme_name(touch_gamepad_theme_t theme)
     return (theme == TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK) ? "green-on-black" : "blue-on-black";
 }
 
-const char *touch_gamepad_menu_item_name(touch_gamepad_menu_item_t item)
+/* Axis names indexed by the low two bits of an axis binding. */
+static const char *const s_axis_names[] = { "X", "Y", "Z", "Rz" };
+#define TOUCH_GAMEPAD_AXIS_NAME_MASK 0x3
+
+/* Candidate joystick axis pairs cycled through by the slide mapping rows. */
+static const touch_gamepad_axis_binding_t s_axis_pairs[] = {
+    { 0, 1 }, { 2, 3 }, { 0, 2 }, { 1, 3 },
+};
+#define TOUCH_GAMEPAD_AXIS_PAIR_COUNT ((uint8_t)(sizeof(s_axis_pairs) / sizeof(s_axis_pairs[0])))
+
+static void touch_gamepad_rotate_axis_binding(touch_gamepad_axis_binding_t *binding, int8_t direction)
 {
-    switch (item) {
-    case TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT:
-        return "BLE/USB mode";
-    case TOUCH_GAMEPAD_MENU_ITEM_REPAIR:
-        return "Start BLE pairing";
-    case TOUCH_GAMEPAD_MENU_ITEM_MAPPING:
-        return "Buttons and axes mapping";
-    case TOUCH_GAMEPAD_MENU_ITEM_THEME:
-        return "Color theme";
-    default:
-        return "Unknown";
+    uint8_t index = 0;
+
+    for (uint8_t i = 0; i < TOUCH_GAMEPAD_AXIS_PAIR_COUNT; ++i) {
+        if ((s_axis_pairs[i].axis_x == binding->axis_x) && (s_axis_pairs[i].axis_y == binding->axis_y)) {
+            index = i;
+            break;
+        }
     }
+
+    if (direction < 0) {
+        index = (uint8_t)((index + TOUCH_GAMEPAD_AXIS_PAIR_COUNT - 1U) % TOUCH_GAMEPAD_AXIS_PAIR_COUNT);
+    } else {
+        index = (uint8_t)((index + 1U) % TOUCH_GAMEPAD_AXIS_PAIR_COUNT);
+    }
+
+    *binding = s_axis_pairs[index];
+}
+
+static void touch_gamepad_format_axis_pair(const touch_gamepad_axis_binding_t *binding, char *out, size_t out_len)
+{
+    snprintf(out, out_len, "%s/%s",
+             s_axis_names[binding->axis_x & TOUCH_GAMEPAD_AXIS_NAME_MASK],
+             s_axis_names[binding->axis_y & TOUCH_GAMEPAD_AXIS_NAME_MASK]);
 }
 
 uint8_t touch_gamepad_button_count(void)
@@ -355,6 +376,7 @@ bool touch_gamepad_detect_gesture(touch_gamepad_gesture_state_t *state,
 
     if (is_tap) {
         const uint8_t corner = touch_gamepad_identify_corner(&frame->start[0], preset);
+        const bool upper_half = touch_gamepad_all_points_in_upper_half(frame, preset);
         static const uint8_t expected_corners[TOUCH_GAMEPAD_CORNER_COUNT] = {
             TOUCH_GAMEPAD_CORNER_LOWER_LEFT,
             TOUCH_GAMEPAD_CORNER_UPPER_LEFT,
@@ -373,14 +395,20 @@ bool touch_gamepad_detect_gesture(touch_gamepad_gesture_state_t *state,
             state->expected_corner_index = (corner == expected_corners[0]) ? 1U : 0U;
         }
 
-        if (touch_gamepad_all_points_in_upper_half(frame, preset)) {
-            event->type = TOUCH_GAMEPAD_GESTURE_TAP;
-            event->finger_count = frame->finger_count;
-            event->tap_zone = touch_gamepad_upper_half_zone(&frame->start[0], preset);
-            return true;
-        }
-
-        return false;
+        /*
+         * Report every tap with its raw coordinates so the configuration menu
+         * can hit-test rows anywhere on the screen. The gameplay handler only
+         * acts on taps whose start is in the upper half (tap_upper_half), so
+         * lower-half taps stay inert during normal play but remain available to
+         * the full-screen menu overlay.
+         */
+        event->type = TOUCH_GAMEPAD_GESTURE_TAP;
+        event->finger_count = frame->finger_count;
+        event->tap_upper_half = upper_half;
+        event->tap_x = frame->start[0].x;
+        event->tap_y = frame->start[0].y;
+        event->tap_zone = upper_half ? touch_gamepad_upper_half_zone(&frame->start[0], preset) : 0U;
+        return true;
     }
 
     if (touch_gamepad_all_points_in_lower_half(frame, preset)) {
@@ -404,25 +432,231 @@ bool touch_gamepad_detect_gesture(touch_gamepad_gesture_state_t *state,
     return false;
 }
 
+/*
+ * Row layout for each menu screen. The main screen lists the four configuration
+ * choices followed by Save/Cancel; the mapping sub-screen lists the eight tap
+ * bindings, both slide axis pairs, then Save/Cancel.
+ */
+enum {
+    TOUCH_GAMEPAD_MAIN_ROW_TRANSPORT = 0,
+    TOUCH_GAMEPAD_MAIN_ROW_THEME,
+    TOUCH_GAMEPAD_MAIN_ROW_MAPPING,
+    TOUCH_GAMEPAD_MAIN_ROW_REPAIR,
+    TOUCH_GAMEPAD_MAIN_ROW_SAVE,
+    TOUCH_GAMEPAD_MAIN_ROW_CANCEL,
+    TOUCH_GAMEPAD_MAIN_ROW_COUNT,
+};
+
+enum {
+    TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_ONE = TOUCH_GAMEPAD_TAP_BINDING_COUNT,
+    TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_TWO,
+    TOUCH_GAMEPAD_MAPPING_ROW_SAVE,
+    TOUCH_GAMEPAD_MAPPING_ROW_CANCEL,
+    TOUCH_GAMEPAD_MAPPING_ROW_COUNT,
+};
+
 void touch_gamepad_menu_init(touch_gamepad_menu_state_t *menu_state)
 {
     memset(menu_state, 0, sizeof(*menu_state));
-    menu_state->current_item = TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT;
+    menu_state->screen = TOUCH_GAMEPAD_MENU_SCREEN_MAIN;
+    menu_state->selected = 0U;
 }
 
 void touch_gamepad_menu_open(touch_gamepad_menu_state_t *menu_state)
 {
     menu_state->open = true;
-    menu_state->current_item = TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT;
+    menu_state->screen = TOUCH_GAMEPAD_MENU_SCREEN_MAIN;
+    menu_state->selected = 0U;
 }
 
-void touch_gamepad_menu_next(touch_gamepad_menu_state_t *menu_state)
+uint8_t touch_gamepad_menu_row_count(const touch_gamepad_menu_state_t *menu_state)
 {
-    if (!menu_state->open) {
-        return;
+    return (menu_state->screen == TOUCH_GAMEPAD_MENU_SCREEN_MAPPING)
+               ? (uint8_t)TOUCH_GAMEPAD_MAPPING_ROW_COUNT
+               : (uint8_t)TOUCH_GAMEPAD_MAIN_ROW_COUNT;
+}
+
+static void touch_gamepad_menu_build_main_view(const touch_gamepad_config_t *config,
+                                               const touch_gamepad_board_preset_t *preset,
+                                               touch_gamepad_menu_view_t *view)
+{
+    snprintf(view->title, sizeof(view->title), "Configuration");
+    view->count = (uint8_t)TOUCH_GAMEPAD_MAIN_ROW_COUNT;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_TRANSPORT].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Transport");
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_TRANSPORT].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "%s%s",
+             touch_gamepad_transport_name(config->transport_mode),
+             preset->supports_usb ? "" : " (fixed)");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_TRANSPORT].kind =
+        preset->supports_usb ? TOUCH_GAMEPAD_MENU_ROW_CHOICE : TOUCH_GAMEPAD_MENU_ROW_ACTION;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_THEME].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Color theme");
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_THEME].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "%s",
+             config->theme == TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK ? "green" : "blue");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_THEME].kind = TOUCH_GAMEPAD_MENU_ROW_CHOICE;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_MAPPING].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Buttons and axes");
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_MAPPING].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "tap to edit");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_MAPPING].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_REPAIR].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "BLE pairing reset");
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_REPAIR].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "%s",
+             config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE ? "tap to re-pair" : "BLE only");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_REPAIR].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_SAVE].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Save");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_SAVE].value[0] = '\0';
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_SAVE].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAIN_ROW_CANCEL].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Cancel");
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_CANCEL].value[0] = '\0';
+    view->rows[TOUCH_GAMEPAD_MAIN_ROW_CANCEL].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+}
+
+static void touch_gamepad_menu_build_mapping_view(const touch_gamepad_config_t *config,
+                                                  touch_gamepad_menu_view_t *view)
+{
+    snprintf(view->title, sizeof(view->title), "Buttons and axes");
+    view->count = (uint8_t)TOUCH_GAMEPAD_MAPPING_ROW_COUNT;
+
+    for (uint8_t i = 0; i < TOUCH_GAMEPAD_TAP_BINDING_COUNT; ++i) {
+        const uint8_t zone = (uint8_t)(i / 2U);
+        const uint8_t fingers = (uint8_t)((i % 2U) + 1U);
+        uint8_t button = config->tap_buttons[i];
+
+        if (button >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
+            button = s_default_tap_buttons[i];
+        }
+
+        snprintf(view->rows[i].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Zone %u %u-finger",
+                 (unsigned)(zone + 1U), (unsigned)fingers);
+        snprintf(view->rows[i].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "%s", s_button_labels[button]);
+        view->rows[i].kind = TOUCH_GAMEPAD_MENU_ROW_CHOICE;
     }
 
-    menu_state->current_item = (touch_gamepad_menu_item_t)((menu_state->current_item + 1U) % TOUCH_GAMEPAD_MENU_ITEM_COUNT);
+    snprintf(view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_ONE].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "1-finger slide");
+    touch_gamepad_format_axis_pair(&config->one_finger_slide,
+                                   view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_ONE].value,
+                                   TOUCH_GAMEPAD_MENU_VALUE_LENGTH);
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_ONE].kind = TOUCH_GAMEPAD_MENU_ROW_CHOICE;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_TWO].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "2-finger slide");
+    touch_gamepad_format_axis_pair(&config->two_finger_slide,
+                                   view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_TWO].value,
+                                   TOUCH_GAMEPAD_MENU_VALUE_LENGTH);
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_TWO].kind = TOUCH_GAMEPAD_MENU_ROW_CHOICE;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SAVE].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Save");
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SAVE].value[0] = '\0';
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_SAVE].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+
+    snprintf(view->rows[TOUCH_GAMEPAD_MAPPING_ROW_CANCEL].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Cancel");
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_CANCEL].value[0] = '\0';
+    view->rows[TOUCH_GAMEPAD_MAPPING_ROW_CANCEL].kind = TOUCH_GAMEPAD_MENU_ROW_ACTION;
+}
+
+void touch_gamepad_menu_build_view(const touch_gamepad_menu_state_t *menu_state,
+                                   const touch_gamepad_config_t *config,
+                                   const touch_gamepad_board_preset_t *preset,
+                                   touch_gamepad_menu_view_t *view)
+{
+    memset(view, 0, sizeof(*view));
+
+    if (menu_state->screen == TOUCH_GAMEPAD_MENU_SCREEN_MAPPING) {
+        touch_gamepad_menu_build_mapping_view(config, view);
+    } else {
+        touch_gamepad_menu_build_main_view(config, preset, view);
+    }
+
+    view->selected = (menu_state->selected < view->count) ? menu_state->selected : 0U;
+}
+
+static touch_gamepad_menu_result_t touch_gamepad_menu_tap_main(touch_gamepad_menu_state_t *menu_state,
+                                                               touch_gamepad_config_t *config,
+                                                               const touch_gamepad_board_preset_t *preset,
+                                                               uint8_t row)
+{
+    (void)menu_state;
+
+    switch (row) {
+    case TOUCH_GAMEPAD_MAIN_ROW_TRANSPORT:
+        if (preset->supports_usb) {
+            config->transport_mode = (config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE)
+                                         ? TOUCH_GAMEPAD_TRANSPORT_USB
+                                         : TOUCH_GAMEPAD_TRANSPORT_BLE;
+            return TOUCH_GAMEPAD_MENU_RESULT_CHANGED;
+        }
+        return TOUCH_GAMEPAD_MENU_RESULT_NONE;
+    case TOUCH_GAMEPAD_MAIN_ROW_THEME:
+        config->theme = (config->theme == TOUCH_GAMEPAD_THEME_BLUE_ON_BLACK)
+                            ? TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK
+                            : TOUCH_GAMEPAD_THEME_BLUE_ON_BLACK;
+        return TOUCH_GAMEPAD_MENU_RESULT_THEME_CHANGED;
+    case TOUCH_GAMEPAD_MAIN_ROW_MAPPING:
+        return TOUCH_GAMEPAD_MENU_RESULT_OPEN_MAPPING;
+    case TOUCH_GAMEPAD_MAIN_ROW_REPAIR:
+        return TOUCH_GAMEPAD_MENU_RESULT_REPAIR;
+    case TOUCH_GAMEPAD_MAIN_ROW_SAVE:
+        return TOUCH_GAMEPAD_MENU_RESULT_SAVE;
+    case TOUCH_GAMEPAD_MAIN_ROW_CANCEL:
+        return TOUCH_GAMEPAD_MENU_RESULT_CANCEL;
+    default:
+        return TOUCH_GAMEPAD_MENU_RESULT_NONE;
+    }
+}
+
+static touch_gamepad_menu_result_t touch_gamepad_menu_tap_mapping(touch_gamepad_config_t *config,
+                                                                  uint8_t row,
+                                                                  int8_t direction)
+{
+    const int8_t step = (direction < 0) ? -1 : 1;
+
+    if (row < TOUCH_GAMEPAD_TAP_BINDING_COUNT) {
+        const uint8_t count = TOUCH_GAMEPAD_BUTTON_LABEL_COUNT;
+        uint8_t button = config->tap_buttons[row];
+
+        if (button >= count) {
+            button = s_default_tap_buttons[row];
+        }
+        button = (step < 0) ? (uint8_t)((button + count - 1U) % count)
+                            : (uint8_t)((button + 1U) % count);
+        config->tap_buttons[row] = button;
+        return TOUCH_GAMEPAD_MENU_RESULT_CHANGED;
+    }
+
+    switch (row) {
+    case TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_ONE:
+        touch_gamepad_rotate_axis_binding(&config->one_finger_slide, step);
+        return TOUCH_GAMEPAD_MENU_RESULT_CHANGED;
+    case TOUCH_GAMEPAD_MAPPING_ROW_SLIDE_TWO:
+        touch_gamepad_rotate_axis_binding(&config->two_finger_slide, step);
+        return TOUCH_GAMEPAD_MENU_RESULT_CHANGED;
+    case TOUCH_GAMEPAD_MAPPING_ROW_SAVE:
+        return TOUCH_GAMEPAD_MENU_RESULT_SAVE;
+    case TOUCH_GAMEPAD_MAPPING_ROW_CANCEL:
+        return TOUCH_GAMEPAD_MENU_RESULT_CANCEL;
+    default:
+        return TOUCH_GAMEPAD_MENU_RESULT_NONE;
+    }
+}
+
+touch_gamepad_menu_result_t touch_gamepad_menu_tap_row(touch_gamepad_menu_state_t *menu_state,
+                                                       touch_gamepad_config_t *config,
+                                                       const touch_gamepad_board_preset_t *preset,
+                                                       uint8_t row,
+                                                       int8_t direction)
+{
+    if (!menu_state->open || (row >= touch_gamepad_menu_row_count(menu_state))) {
+        return TOUCH_GAMEPAD_MENU_RESULT_NONE;
+    }
+
+    menu_state->selected = row;
+
+    if (menu_state->screen == TOUCH_GAMEPAD_MENU_SCREEN_MAPPING) {
+        return touch_gamepad_menu_tap_mapping(config, row, direction);
+    }
+
+    return touch_gamepad_menu_tap_main(menu_state, config, preset, row);
 }
 
 void touch_gamepad_build_mapping_snapshot(const touch_gamepad_config_t *config,
@@ -477,49 +711,6 @@ esp_err_t touch_gamepad_set_slide_binding(touch_gamepad_config_t *config,
     }
 
     return ESP_ERR_INVALID_ARG;
-}
-
-esp_err_t touch_gamepad_menu_activate(touch_gamepad_config_t *config,
-                                      touch_gamepad_menu_state_t *menu_state,
-                                      touch_gamepad_mapping_snapshot_t *snapshot)
-{
-    const touch_gamepad_board_preset_t *preset = touch_gamepad_get_board_preset();
-
-    if (!menu_state->open) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    switch (menu_state->current_item) {
-    case TOUCH_GAMEPAD_MENU_ITEM_TRANSPORT:
-        if (preset->supports_usb) {
-            config->transport_mode = (config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE)
-                                         ? TOUCH_GAMEPAD_TRANSPORT_USB
-                                         : TOUCH_GAMEPAD_TRANSPORT_BLE;
-        } else {
-            config->transport_mode = TOUCH_GAMEPAD_TRANSPORT_BLE;
-        }
-        break;
-    case TOUCH_GAMEPAD_MENU_ITEM_REPAIR:
-        if (config->transport_mode == TOUCH_GAMEPAD_TRANSPORT_BLE) {
-            config->repair_requested = true;
-        }
-        break;
-    case TOUCH_GAMEPAD_MENU_ITEM_MAPPING:
-        if (snapshot == NULL) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        touch_gamepad_build_mapping_snapshot(config, snapshot);
-        return ESP_OK;
-    case TOUCH_GAMEPAD_MENU_ITEM_THEME:
-        config->theme = (config->theme == TOUCH_GAMEPAD_THEME_BLUE_ON_BLACK)
-                            ? TOUCH_GAMEPAD_THEME_GREEN_ON_BLACK
-                            : TOUCH_GAMEPAD_THEME_BLUE_ON_BLACK;
-        break;
-    default:
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return touch_gamepad_config_save(config);
 }
 
 void touch_gamepad_log_configuration(const touch_gamepad_config_t *config)
