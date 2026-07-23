@@ -521,7 +521,7 @@ static void touch_gamepad_menu_build_mapping_view(const touch_gamepad_config_t *
 
     for (uint8_t i = 0; i < TOUCH_GAMEPAD_TAP_BINDING_COUNT; ++i) {
         const uint8_t zone = (uint8_t)(i / 2U);
-        const uint8_t fingers = (uint8_t)((i % 2U) + 1U);
+        const uint8_t finger_count = (uint8_t)((i % 2U) + 1U);
         uint8_t button = config->tap_buttons[i];
 
         if (button >= TOUCH_GAMEPAD_BUTTON_LABEL_COUNT) {
@@ -529,7 +529,7 @@ static void touch_gamepad_menu_build_mapping_view(const touch_gamepad_config_t *
         }
 
         snprintf(view->rows[i].label, TOUCH_GAMEPAD_MENU_LABEL_LENGTH, "Zone %u %u-finger",
-                 (unsigned)(zone + 1U), (unsigned)fingers);
+                 (unsigned)(zone + 1U), (unsigned)finger_count);
         snprintf(view->rows[i].value, TOUCH_GAMEPAD_MENU_VALUE_LENGTH, "%s", s_button_labels[button]);
         view->rows[i].kind = TOUCH_GAMEPAD_MENU_ROW_CHOICE;
     }

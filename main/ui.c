@@ -302,7 +302,7 @@ void ui_show_menu(const touch_gamepad_menu_state_t *menu,
         s_menu_row_count = (uint8_t)(i + 1U);
     }
 
-    if (view.selected < s_menu_row_count) {
+    if ((view.selected < s_menu_row_count) && (s_menu_rows[view.selected] != NULL)) {
         lv_obj_scroll_to_view(s_menu_rows[view.selected], LV_ANIM_OFF);
     }
 

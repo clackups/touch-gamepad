@@ -231,6 +231,11 @@ static void app_handle_gesture(const touch_gamepad_gesture_event_t *event)
     }
 
     if (event->type == TOUCH_GAMEPAD_GESTURE_TAP) {
+        /*
+         * During gameplay only upper-half taps map to buttons; the gesture
+         * engine now also reports lower-half taps (so the full-screen menu can
+         * hit-test rows anywhere), so ignore them here.
+         */
         if (!event->tap_upper_half) {
             return;
         }
